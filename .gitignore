@@ -1,0 +1,23 @@
+__pycache__/
+*.pyc
+.DS_Store
+.playwright-mcp/
+outputs/
+loop-engine/logs/
+loop-engine/locks/
+loop-engine/worktrees/
+loop-engine/knowledge/
+
+# Loop runtime state and private operator artifacts.
+loop-engine/runs/
+loop-engine/reports/
+loop-engine/registry.json
+loop-engine/state.json
+loop-engine/pm-reviews/
+loop-engine/human-feedback/
+loop-engine/evening-scorecards/*
+!loop-engine/evening-scorecards/.gitkeep
+
+# Project-specific local scheduler helpers are generated runtime files.
+loop-engine/scheduler/run-*-cycle.sh
+loop-engine/scheduler/run-*-unattended-*.sh

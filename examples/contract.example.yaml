@@ -1,0 +1,49 @@
+schema_version: 1
+project_id: example-product
+name: Example Product
+
+purpose: >
+  State the product outcome this loop should improve. Keep this concrete and
+  user-facing.
+
+artifact_contract:
+  primary_artifact: "Describe the user-visible artifact or workflow."
+  success_criteria:
+    - "A user can observe the improvement without reading implementation logs."
+    - "The change has a clear before/after benefit."
+
+risk_policy:
+  low_risk:
+    - tests
+    - docs
+    - CLI/status/digest wording
+    - deterministic parsing or validation
+    - small observability/reporting changes
+  medium_risk:
+    - visible local UI/widget changes
+    - small product-surface behavior changes
+    - payload/schema changes with tests
+    - single-module non-trivial refactors
+  high_risk:
+    - credentials, secrets, .env, auth tokens
+    - external auth/login/OAuth probing
+    - launchd, cron, scheduler installation
+    - publishing, deployment, external posting
+    - destructive file/data operations
+    - trading, payment, broker, money movement
+    - broad architecture rewrites
+    - cross-project permission expansion
+
+allowed_low_risk_work:
+  - "Improve tests or deterministic validation."
+  - "Improve status/digest/report clarity."
+  - "Tighten parsing, error handling, or observability without behavior drift."
+
+verification_commands:
+  - "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q"
+
+loop_rules:
+  value_threshold: 3
+  max_noop_cycles: 1
+  default_cadence: hourly_forever
+  stop_condition: "Stop when no candidate clears the value threshold."

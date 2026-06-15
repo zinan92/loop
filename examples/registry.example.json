@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "projects": {
+    "example-product": {
+      "name": "Example Product",
+      "repo_path": "/path/to/example-product",
+      "pilot_branch": "loop/example-product-pilot",
+      "contract_path": "/path/to/example-product/.loop/contract.yaml",
+      "github_repo": "owner/example-product",
+      "linear_project": "Example Product",
+      "linear_project_id": "linear-project-id",
+      "linear_control_issue": "ENG-123",
+      "linear_control_issue_id": "linear-issue-id",
+      "linear_control_issue_url": "https://linear.app/example/issue/ENG-123",
+      "linear_sync": {
+        "enabled": true,
+        "api_key_file": "~/.config/loop/linear-api-key",
+        "control_issue": "ENG-123",
+        "comment_on_control_issue": true
+      },
+      "team": "ENG",
+      "verification_commands": [
+        "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q"
+      ],
+      "auto_execute_risk": "low",
+      "auto_approval": {
+        "only_if_risk": "low",
+        "max_tasks_per_cycle": 5,
+        "blocked_categories": [
+          "credentials",
+          "external_publish",
+          "scheduler_install",
+          "money_movement"
+        ]
+      },
+      "agents": {
+        "planner": {"model": "gpt-5.5", "reasoning_effort": "high", "timeout_seconds": 600},
+        "worker": {"model": "gpt-5.5", "reasoning_effort": "high", "timeout_seconds": 900},
+        "reviewer": {"model": "gpt-5.5", "reasoning_effort": "high", "timeout_seconds": 600}
+      }
+    }
+  }
+}
