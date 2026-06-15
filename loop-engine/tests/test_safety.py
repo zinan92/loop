@@ -221,6 +221,35 @@ def test_candidate_paths_are_sorted_by_value_score(tmp_path):
     assert [path.name for path in paths] == ["issue-002.md", "issue-001.md"]
 
 
+def test_default_max_tasks_per_cycle_is_one():
+    assert loopctl.max_tasks_per_cycle({}) == 1
+    assert loopctl.max_tasks_per_cycle({"max_tasks_per_cycle": None}) == 1
+    assert loopctl.max_tasks_per_cycle({"max_tasks_per_cycle": "bad"}) == 1
+    assert loopctl.max_tasks_per_cycle({"max_tasks_per_cycle": 0}) == 1
+    assert loopctl.max_tasks_per_cycle({"max_tasks_per_cycle": "2"}) == 2
+
+
+def test_deferred_issue_paths_are_not_human_approval_items(tmp_path):
+    run_dir = tmp_path / "runs" / "proj-run"
+    issues_dir = run_dir / "issues"
+    issues_dir.mkdir(parents=True)
+    issue_1 = issues_dir / "issue-001.md"
+    issue_2 = issues_dir / "issue-002.md"
+    issue_1.write_text(TEMPLATE_ISSUE)
+    issue_2.write_text(TEMPLATE_ISSUE)
+
+    selected = [issue_1, issue_2]
+    max_tasks = loopctl.max_tasks_per_cycle({})
+    deferred = selected[max_tasks:]
+    loopctl.write_deferred_issue_paths(run_dir, deferred, max_tasks)
+
+    assert [path.name for path in selected[:max_tasks]] == ["issue-001.md"]
+    deferred_text = (run_dir / "deferred-candidates.md").read_text()
+    assert "Deferred Candidates" in deferred_text
+    assert "`issues/issue-002.md`" in deferred_text
+    assert "human" not in deferred_text.lower()
+
+
 def test_higher_value_waiting_item_blocks_lower_value_work(tmp_path):
     run_dir = tmp_path / "runs" / "proj-run"
     (run_dir / "issues").mkdir(parents=True)

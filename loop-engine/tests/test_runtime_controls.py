@@ -398,6 +398,7 @@ def test_bootstrap_writes_contract_and_registry(monkeypatch, tmp_path):
     monkeypatch.setattr(loopctl, "REGISTRY_PATH", registry)
     monkeypatch.setattr(loopctl, "STATE_PATH", state)
     monkeypatch.setattr(loopctl, "gh_auth_ok", lambda: True)
+    monkeypatch.setattr(loopctl, "linear_api_key", lambda cfg: "lin_api_test")
     monkeypatch.setattr(loopctl, "linear_bootstrap_project", lambda project_id, project_name: {
         "linear_project_id": "linear-project-id",
         "linear_project": project_name,
@@ -411,12 +412,48 @@ def test_bootstrap_writes_contract_and_registry(monkeypatch, tmp_path):
     contract = repo / ".loop" / "contract.yaml"
     assert project_id == "demo-app"
     assert contract.exists()
+    contract_text = contract.read_text()
+    assert "TODO" not in contract_text
+    assert "highest-value small product change" in contract_text
+    assert "do nothing" in contract_text
     cfg = json.loads(registry.read_text())["projects"]["demo-app"]
     assert cfg["repo_path"] == str(repo)
     assert cfg["github_repo"] == "acme/demo-app"
     assert cfg["pilot_branch"] == "loop/demo-app-pilot"
     assert cfg["linear_control_issue"] == "WEN-999"
+    assert cfg["linear_sync"]["enabled"] is True
+    assert cfg["auto_approval"]["max_tasks_per_cycle"] == 1
     assert cfg["contract_path"] == str(contract)
+
+
+def test_bootstrap_without_linear_key_disables_linear_sync(monkeypatch, tmp_path):
+    repo = tmp_path / "No Linear App"
+    _init_repo(repo)
+    _git(repo, "remote", "add", "origin", "git@github.com:acme/no-linear-app.git")
+    registry = tmp_path / "registry.json"
+    state = tmp_path / "state.json"
+    registry.write_text(json.dumps({"projects": {}}))
+    monkeypatch.setattr(loopctl, "REGISTRY_PATH", registry)
+    monkeypatch.setattr(loopctl, "STATE_PATH", state)
+    monkeypatch.setattr(loopctl, "gh_auth_ok", lambda: True)
+    monkeypatch.setattr(loopctl, "linear_api_key", lambda cfg: None)
+    monkeypatch.setattr(loopctl, "linear_bootstrap_project", lambda project_id, project_name: pytest.fail("Linear bootstrap should not run without a key"))
+    monkeypatch.setattr(loopctl, "create_bootstrap_commit_and_branch", lambda repo_path, project_id: "loop/no-linear-app-pilot")
+
+    project_id = loopctl.bootstrap_project(repo)
+
+    assert project_id == "no-linear-app"
+    contract = repo / ".loop" / "contract.yaml"
+    assert contract.exists()
+    assert "TODO" not in contract.read_text()
+    cfg = json.loads(registry.read_text())["projects"]["no-linear-app"]
+    assert cfg["github_repo"] == "acme/no-linear-app"
+    assert cfg["linear_project"] is None
+    assert cfg["linear_project_id"] is None
+    assert cfg["linear_control_issue"] is None
+    assert cfg["linear_control_issue_id"] is None
+    assert cfg["linear_sync"]["enabled"] is False
+    assert cfg["team"] is None
 
 
 def test_start_command_loads_starts_and_ticks_initialized_project(monkeypatch, tmp_path):

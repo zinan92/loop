@@ -502,6 +502,38 @@ def linear_bootstrap_project(project_id: str, project_name: str) -> dict:
     }
 
 
+def linear_disabled_metadata() -> dict:
+    return {
+        "linear_project_id": None,
+        "linear_project": None,
+        "linear_control_issue": None,
+        "linear_control_issue_id": None,
+        "linear_control_issue_url": None,
+        "linear_sync": {
+            "enabled": False,
+            "comment_on_control_issue": False,
+        },
+        "team": None,
+    }
+
+
+def bootstrap_linear_metadata(project_id: str, project_name: str) -> dict:
+    cfg = default_linear_cfg()
+    if not linear_api_key(cfg):
+        return linear_disabled_metadata()
+    linear = linear_bootstrap_project(project_id, project_name)
+    return {
+        **linear,
+        "linear_sync": {
+            "enabled": True,
+            "api_key_file": str(DEFAULT_LINEAR_API_KEY_FILE),
+            "control_issue": linear["linear_control_issue"],
+            "comment_on_control_issue": True,
+        },
+        "team": DEFAULT_LINEAR_TEAM_NAME,
+    }
+
+
 def linear_issue(cfg: dict) -> dict:
     sync = linear_sync_cfg(cfg)
     issue_identifier = sync.get("control_issue") or cfg.get("linear_control_issue")
@@ -766,12 +798,16 @@ name: {project_name}
 repo_path: {repo_path}
 
 purpose: >
-  TODO: Describe the product purpose and the user-facing artifact this project
-  should improve through the agent loop.
+  Improve the user-facing value of {project_name}. The loop should identify the
+  highest-value small product change available in this repo, prefer observable
+  behavior over internal cleanup, and stop when no candidate clears the value
+  line.
 
 artifact_contract:
   primary:
-    - TODO: define the main product artifact or command
+    - user-facing commands, screens, generated artifacts, or workflows
+    - tests that prove the selected user-visible behavior
+    - docs only when they clarify a real user or operator workflow
   not_primary:
     - launchd installation state
     - credential or external account state
@@ -789,21 +825,24 @@ risk_policy:
     - broad architecture rewrites
 
 allowed_low_risk_work:
-  - tests
-  - README or docs
-  - CLI output clarity
-  - deterministic parsing or validation
-  - small internal refactors with unchanged behavior
+  - small user-visible CLI, status, API, or artifact clarity improvements with tests
+  - tests for the selected product behavior
+  - README or docs that clarify the actual user or operator workflow
+  - deterministic parsing, validation, or observability that unlocks user value
+  - small internal refactors only when needed for the selected behavior and covered by tests
 
 verification:
   commands:
 {commands}
 
 loop_rules:
+  - Planner ranks candidates by product value, not ease.
   - Planner creates low-risk tasks with bounded Allowed Files.
+  - No candidate over the value line means do nothing; do not create busywork.
   - Worker modifies only files listed in the issue.
   - Reviewer must verify Definition of Done and tests before pass.
-  - Medium or high risk work is reported to Linear for human approval.
+  - Medium or high risk work is recorded for human approval.
+  - When Linear sync is disabled, approval queues stay in local state, digest, and GitHub.
   - Runtime state and run logs live in the global loop engine, not here.
 """
 
@@ -864,15 +903,14 @@ def bootstrap_project(cwd: Path) -> str:
         )
     if not gh_auth_ok():
         raise LoopBlocked("missing_github_auth", "GitHub CLI auth is required before loop bootstrap")
-    if not linear_api_key(default_linear_cfg()):
-        raise LoopBlocked("missing_linear_key", "Linear API key is required before loop bootstrap")
 
     contract_path = repo_path / ".loop" / "contract.yaml"
     contract_project_id = parse_contract_value(contract_path, "project_id") if contract_path.exists() else None
     project_id = contract_project_id or slugify_project_id(repo_path.name)
     project_name = parse_contract_value(contract_path, "name") if contract_path.exists() else repo_path.name
     project_name = project_name or repo_path.name
-    linear = linear_bootstrap_project(project_id, project_name)
+    linear = bootstrap_linear_metadata(project_id, project_name)
+    verification_commands = detect_verification_commands(repo_path)
     baseline_tag = create_product_baseline_tag(repo_path, project_id)
 
     if not contract_path.exists():
@@ -881,7 +919,7 @@ def bootstrap_project(cwd: Path) -> str:
             project_id,
             project_name,
             repo_path,
-            detect_verification_commands(repo_path),
+            verification_commands,
         ))
 
     pilot_branch = create_bootstrap_commit_and_branch(repo_path, project_id)
@@ -897,19 +935,14 @@ def bootstrap_project(cwd: Path) -> str:
         "linear_control_issue": linear["linear_control_issue"],
         "linear_control_issue_id": linear["linear_control_issue_id"],
         "linear_control_issue_url": linear.get("linear_control_issue_url"),
-        "linear_sync": {
-            "enabled": True,
-            "api_key_file": str(DEFAULT_LINEAR_API_KEY_FILE),
-            "control_issue": linear["linear_control_issue"],
-            "comment_on_control_issue": True,
-        },
-        "team": DEFAULT_LINEAR_TEAM_NAME,
-        "verification_commands": detect_verification_commands(repo_path),
+        "linear_sync": linear["linear_sync"],
+        "team": linear["team"],
+        "verification_commands": verification_commands,
         "auto_execute_risk": "low",
         "auto_approval": {
             "silent_approval_after_minutes": 30,
             "only_if_risk": "low",
-            "max_tasks_per_cycle": 5,
+            "max_tasks_per_cycle": 1,
             "blocked_categories": list(BLOCKED_SIGNALS.keys()),
         },
         "agents": {
@@ -1451,6 +1484,32 @@ def candidate_issue_paths(
         if ISSUE_NAME_RE.match(path.name):
             out.append(validate_issue_file(run_dir, path))
     return out
+
+
+def max_tasks_per_cycle(auto: dict) -> int:
+    raw = auto.get("max_tasks_per_cycle")
+    if raw is None:
+        return 1
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return 1
+    return max(1, value)
+
+
+def write_deferred_issue_paths(run_dir: Path, issue_paths: list[Path], max_tasks: int) -> None:
+    if not issue_paths:
+        return
+    lines = [
+        "# Deferred Candidates",
+        "",
+        f"Only {max_tasks} auto-executable task(s) may run in one cycle.",
+        "The remaining candidates were deferred to avoid same-cycle branch and PR conflicts.",
+        "",
+    ]
+    for path in issue_paths:
+        lines.append(f"- `{path.relative_to(run_dir)}`")
+    (run_dir / "deferred-candidates.md").write_text("\n".join(lines) + "\n")
 
 
 def load_candidates(run_dir: Path) -> list[dict]:
@@ -3112,12 +3171,11 @@ def cycle(project: str, locked: bool = True, supervised: bool = False) -> dict:
     # Fail closed: if not configured, screen against ALL known categories and
     # cap tasks at a safe default, rather than running unscreened / unbounded.
     blocked_categories = auto.get("blocked_categories") or list(BLOCKED_SIGNALS.keys())
-    max_tasks = auto.get("max_tasks_per_cycle")
-    if max_tasks is None:
-        max_tasks = 3
+    max_tasks = max_tasks_per_cycle(auto)
     branch = None
     task_results: list[dict] = []
     waiting_for_human: list[dict] = []
+    deferred_issue_paths: list[Path] = []
     try:
         set_phase(project, "planner", run_id)
         issue_paths = planner(project, cfg, run_dir, policy=policy, supervised=supervised)
@@ -3259,11 +3317,12 @@ def cycle(project: str, locked: bool = True, supervised: bool = False) -> dict:
                 pause_reason="higher_value_item_requires_approval",
             )
         # SAFETY SCREEN 2: never auto-run more than max_tasks_per_cycle.
-        if max_tasks is not None and len(issue_paths) > max_tasks:
-            for path in issue_paths[max_tasks:]:
-                waiting_for_human.append({
-                    "issue_path": str(path), "reason": "max_tasks_per_cycle",
-                })
+        # Extra auto-runnable tasks are deferred, not marked as human approval
+        # blockers. They can be reconsidered on the next cycle after the repo
+        # has absorbed the first PR, which avoids same-cycle branch conflicts.
+        if len(issue_paths) > max_tasks:
+            deferred_issue_paths = issue_paths[max_tasks:]
+            write_deferred_issue_paths(run_dir, deferred_issue_paths, max_tasks)
             issue_paths = issue_paths[:max_tasks]
         if not issue_paths and waiting_for_human:
             return finish_controlled_cycle(
@@ -3289,6 +3348,7 @@ def cycle(project: str, locked: bool = True, supervised: bool = False) -> dict:
             run_dir,
             "planner-candidates",
             f"Planner: {len(issue_paths)} auto-executable, {len(waiting_for_human)} gated to human for `{run_id}`.\n\n"
+            f"Deferred to future cycle: {len(deferred_issue_paths)}\n\n"
             f"{candidate_lines}",
         )
         linear_update_milestone(

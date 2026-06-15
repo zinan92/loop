@@ -6,7 +6,7 @@
 
 [![Python](https://img.shields.io/badge/python-3.11+-blue.svg)](https://python.org)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-67%20passing-brightgreen.svg)](loop-engine/tests)
+[![Tests](https://img.shields.io/badge/tests-70%20passing-brightgreen.svg)](loop-engine/tests)
 
 </div>
 
@@ -23,7 +23,7 @@ It is a control plane for:
 - supervised medium-risk execution
 - reviewer validation
 - GitHub issue/PR bookkeeping
-- Linear milestone/status sync
+- optional Linear milestone/status sync
 - human digest and approval queues
 
 The project is intentionally conservative: it should create product value
@@ -33,7 +33,7 @@ without turning into autonomous busywork.
 
 ```text
 input  clean local Git repo + GitHub origin + loop contract + optional daily focus
-output Linear milestone + GitHub issues/PRs + run logs + digest + bounded memory
+output GitHub issues/PRs + run logs + digest + bounded memory + optional Linear milestone
 
 gate   missing init/auth/remote        -> LOOP_BLOCKED
 gate   no candidate above value line   -> no-op, no worker run
@@ -47,7 +47,7 @@ Core adapters:
 - Git
 - GitHub CLI (`gh`)
 - Codex CLI
-- Linear GraphQL API
+- Linear GraphQL API, optional
 - macOS `sandbox-exec` for verification isolation
 
 ## 示例输出
@@ -147,6 +147,9 @@ For v1, a target project must be:
 - optionally connected to Linear through `LINEAR_API_KEY`
 
 The engine does not create GitHub repos automatically.
+If no Linear API key is configured, `loop init` still succeeds and disables
+Linear sync for that project; GitHub issues/PRs, local run logs, digests, and
+approval queues remain available.
 
 ## Configuration
 
@@ -166,8 +169,7 @@ Useful environment variables:
 | `LOOP_LINEAR_TEAM_NAME` | Human-readable Linear team name |
 
 If Linear is disabled or unavailable, GitHub and local digest behavior can still
-be used, but Linear milestones/comments will be skipped or blocked depending on
-project configuration.
+be used, and Linear milestones/comments are skipped for that project.
 
 ## Risk Model
 
@@ -206,6 +208,8 @@ The loop is value-first:
 - daily focus ranks work by expected product value
 - planner emits candidates with value scores
 - engine processes candidates by descending value score
+- by default, only the top auto-runnable task executes per cycle to avoid
+  same-cycle PR conflicts
 - a high-value approval item blocks lower-value busywork
 - no valuable candidate means no-op, not forced work
 
