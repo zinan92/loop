@@ -1,4 +1,16 @@
+<div align="center">
+
 # loop
+
+**把一次性的 coding-agent prompt，变成跨本地 Git 项目的「按价值排序、可审计、可暂停」的自进化执行闭环**
+
+[![Python](https://img.shields.io/badge/python-3.11+-blue.svg)](https://python.org)
+[![License](https://img.shields.io/badge/license-Apache--2.0-green.svg)](LICENSE)
+[![Tests](https://img.shields.io/badge/tests-67%20passing-brightgreen.svg)](loop-engine/tests)
+
+</div>
+
+---
 
 `loop` turns a one-off coding-agent prompt into a value-ranked, auditable,
 pausable execution loop across local Git projects.
@@ -37,6 +49,36 @@ Core adapters:
 - Codex CLI
 - Linear GraphQL API
 - macOS `sandbox-exec` for verification isolation
+
+## 示例输出
+
+`loop status` —— 回来后一眼看清当前状态：
+
+```text
+STATE paused
+LAST_RUN <project>-20260615-155853
+NEXT_CYCLE -
+WAITING_FOR_HUMAN 0
+GITHUB <owner>/<project>
+LINEAR_PROJECT <project>
+DIGEST loop-engine/reports/<project>/latest.md
+SCHEDULER installed=False loaded=False
+```
+
+一轮 cycle 跑完（价值门 + 验证门都通过 → 合并 PR）：
+
+```text
+RUN_COMPLETE <project>-20260615-105730 merged tasks=1 waiting_for_human=0
+```
+
+价值门拦截（没有候选过价值线 → 不硬找事做）：
+
+```text
+RUN_COMPLETE <project>-20260615-163000 no_op tasks=0 waiting_for_human=0
+```
+
+`loop digest` 写出 `loop-engine/reports/<project>/latest.md`，回答"我离开时 loop 做了什么"：
+完成的工作 + PR + product before/after + 等待审批队列。
 
 ## PM Skills Are Optional
 
@@ -226,5 +268,5 @@ loop/
 
 ## License
 
-No open-source license has been selected yet. Until a license is added, this
-repository is source-available only.
+[Apache-2.0](LICENSE). 你可以自由使用、修改、商用本项目，需保留版权与许可声明；
+许可证含明确的专利授权。
