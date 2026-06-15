@@ -1,7 +1,6 @@
 """Reproducible safety tests for the loop engine.
 
-Run: python3 -m pytest loop-engine/tests/test_safety.py -v
-(from the engine repo root /Users/wendy/Documents/agent自管理)
+Run from the repo root: python3 -m pytest loop-engine/tests/test_safety.py -v
 
 Covers the two blockers Park flagged plus the round-1/2/3 hardening:
   B1  blocked-keyword scan must ignore the "Out Of Scope" section
