@@ -3020,6 +3020,22 @@ def print_status(project: str, as_json: bool) -> None:
     print(f"SCHEDULER installed={scheduler.get('installed')} loaded={scheduler.get('loaded')} label={scheduler.get('label')}")
 
 
+def project_public_refs(cfg: dict) -> dict[str, str]:
+    repo_path = Path(cfg.get("repo_path") or "")
+    contract_path = Path(cfg.get("contract_path") or "")
+    contract_ref = ".loop/contract.yaml"
+    try:
+        contract_ref = str(contract_path.resolve().relative_to(repo_path.resolve()))
+    except Exception:
+        if contract_path.name:
+            contract_ref = contract_path.name
+    return {
+        "github_repo": str(cfg.get("github_repo") or cfg.get("name") or "-"),
+        "pilot_branch": str(cfg.get("pilot_branch") or "-"),
+        "contract": contract_ref,
+    }
+
+
 def today_date() -> str:
     return dt.date.today().isoformat()
 
@@ -3052,6 +3068,25 @@ def registered_project_ids(projects: list[str] | None = None) -> list[str]:
         registry_project(project)
         result.append(project)
     return result
+
+
+def active_project_ids() -> list[str]:
+    registry_projects = set(registry_data().get("projects", {}).keys())
+    state = load_state()
+    active: list[str] = []
+    for project, project_state in state.get("projects", {}).items():
+        if project in registry_projects and loop_job(project_state).get("state") == "active":
+            active.append(project)
+    return sorted(active)
+
+
+def default_evening_projects(projects: list[str] | None = None) -> list[str]:
+    if projects:
+        return registered_project_ids(projects)
+    approved = set((load_latest_approvals().get("approved") or {}).keys())
+    active = set(active_project_ids())
+    selected = sorted(approved | active)
+    return selected or registered_project_ids([])
 
 
 def today_project_runs(project: str) -> list[dict]:
@@ -3231,7 +3266,7 @@ def render_morning_review(rows: list[dict]) -> str:
         "",
         "## Tomorrow Carry-Forward",
         "",
-        "- Re-read today's evening scorecard before ranking tomorrow's portfolio.",
+        "- Use today's evening scorecard as an input before approving tomorrow's work.",
     ])
     return "\n".join(lines).rstrip() + "\n"
 
@@ -3568,9 +3603,7 @@ def score_for_project(project: str, payload: dict) -> tuple[str, str, str]:
 
 
 def write_evening_scorecard(projects: list[str] | None = None) -> dict:
-    selected = registered_project_ids(projects) if projects else sorted((load_latest_approvals().get("approved") or {}).keys())
-    if not selected:
-        selected = registered_project_ids([])
+    selected = default_evening_projects(projects)
     paths = dated_latest_paths("evening-scorecards")
     report_dir = ENGINE_ROOT / "reports" / "daily"
     report_dir.mkdir(parents=True, exist_ok=True)
@@ -3617,8 +3650,9 @@ def write_evening_scorecard(projects: list[str] | None = None) -> dict:
 
 
 def evening_command(projects: list[str] | None) -> None:
-    selected = projects or sorted((load_latest_approvals().get("approved") or {}).keys())
-    for project in selected:
+    selected = default_evening_projects(projects)
+    projects_to_pause = registered_project_ids(projects) if projects else active_project_ids()
+    for project in projects_to_pause:
         try:
             if control_state(project) == "active":
                 pause_loop(project)
@@ -3972,14 +4006,15 @@ def cycle(project: str, locked: bool = True, supervised: bool = False) -> dict:
         state = load_state()
         state_project(state, project)["current_milestone"] = milestone
         save_state(state)
+    refs = project_public_refs(cfg)
     linear_comment(
         cfg,
         run_dir,
         "cycle-start",
         f"Loop cycle `{run_id}` started for `{cfg['name']}`.\n\n"
-        f"- Project repo: `{cfg['repo_path']}`\n"
-        f"- Pilot branch: `{cfg['pilot_branch']}`\n"
-        f"- Contract: `{cfg['contract_path']}`",
+        f"- GitHub repo: `{refs['github_repo']}`\n"
+        f"- Pilot branch: `{refs['pilot_branch']}`\n"
+        f"- Contract: `{refs['contract']}`",
     )
     repo_path = Path(cfg["repo_path"])
     auto = cfg.get("auto_approval", {})

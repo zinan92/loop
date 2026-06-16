@@ -124,7 +124,7 @@ loop approve <project> --medium-envelope primary-surface \
 loop start-day                       # first cycle now, then hourly until stop/pause/budget
 
 # 7) Evening recap
-loop evening                         # pauses active approved projects, writes scorecards + daily report
+loop evening                         # pauses all active registered loops, writes scorecards + daily report
 ```
 
 To run continuously: `loop start` (hourly, immediate first cycle) → `loop status` / `loop digest` → `loop pause` / `loop stop`.
@@ -174,12 +174,22 @@ By default **only the top-ranked auto-runnable task executes per cycle** (`max_t
 4. Budgets and stop rules come from daily focus: `recommended_cycles`, `stop_condition`, `value_threshold`, `max_noop_cycles`.
 
 **Evening — stop, recap, score:**
-1. `loop evening [project...]` pauses active approved projects.
+1. `loop evening [project...]` pauses the named projects. With no project args, it pauses **all active registered loops**, even loops that were started manually outside the approval flow.
 2. It refreshes project digests and writes:
    - `loop-engine/evening-scorecards/YYYY-MM-DD.md`
    - `loop-engine/evening-scorecards/latest.md`
    - `loop-engine/reports/daily/YYYY-MM-DD.{md,html}`
-3. Tomorrow's morning review reads the latest scorecard before ranking work.
+3. The next planner prompt reads the latest scorecard through the human-feedback context. If you use an external PM skill before `loop approve`, that PM layer should also read it.
+
+### PM skill integration / PM skill 集成
+
+No external PM skill is required: `loop morning` is the built-in baseline PM review. For stronger product judgment, you can run your own PM skill or product-planning workflow before approval, as long as it writes the same handoff artifacts that `loop` understands:
+
+- `loop-engine/pm-reviews/latest.md`
+- `<product-repo>/.loop/daily-focus/latest.md`
+- `loop-engine/approvals/latest.json`
+
+In short: PM skills are optional power-ups, not runtime dependencies.
 
 ---
 
@@ -239,7 +249,7 @@ loop notify test
 loop notify status
 ```
 
-The engine notifies only high-signal events by default: `needs_human`, merged work, and evening recap completion. Every notification attempt is also recorded in `loop-engine/logs/notifications.jsonl`.
+The engine notifies only high-signal events by default: `loop_started`, `needs_human`, merged work, and evening recap completion. Every notification attempt is also recorded in `loop-engine/logs/notifications.jsonl`.
 
 ### Output language / 输出语言
 

@@ -30,7 +30,7 @@ Before the human starts `loop` (especially unattended), tell them, plainly:
 - **Start each day with PM review:** `loop morning` writes `pm-reviews/YYYY-MM-DD.md`; `loop approve <project>` writes the project's `.loop/daily-focus/latest.md`.
 - **Start approved projects only:** `loop start-day` reads `approvals/latest.json`; it refuses projects not approved today.
 - **Trigger one cycle:** `loop run-now` (add `--supervised` only when a preapproved medium-risk envelope exists for the queued work).
-- **End the day:** `loop evening` pauses active approved projects, refreshes digests, and writes `evening-scorecards/YYYY-MM-DD.md`.
+- **End the day:** `loop evening` pauses all active registered loops when no project args are given, refreshes digests, and writes `evening-scorecards/YYYY-MM-DD.md`.
 - **Lifecycle:** `loop pause` / `loop resume` / `loop stop`. `loop init` registers a new project (fails closed if prerequisites are missing).
 - **Escalate, never bypass.** Anything in `waiting_for_human` is a human decision. Surface it; do not reword issues or prompts to force a pass.
 
@@ -76,7 +76,7 @@ commands:
   approve:  { in: "project [--medium-envelope ...]", out: ".loop/daily-focus/latest.md + approvals/latest.json" }
   reject:   { in: "project", out: "approvals/latest.json rejection record" }
   start-day: { in: "today's approved projects", out: "approved loops active; medium first run supervised" }
-  evening:  { in: "approved projects", out: "evening-scorecards/YYYY-MM-DD.md + reports/daily/YYYY-MM-DD.md/html" }
+  evening:  { in: "projects or all active/approved projects", out: "evening-scorecards/YYYY-MM-DD.md + reports/daily/YYYY-MM-DD.md/html" }
   status:   { in: "project", out: "human text or JSON (--json)", reads: "state.json" }
   run-now:  { in: "project [--supervised]", out: "one full cycle or no-op", fail: "waiting_for_human <reason>" }
   start:    { in: "initialized project", out: "scheduler loaded, job active, first cycle immediate" }

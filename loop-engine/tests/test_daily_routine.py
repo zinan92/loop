@@ -150,6 +150,39 @@ def test_evening_writes_scorecard_and_daily_report(monkeypatch, tmp_path):
     assert (engine / "reports" / "daily" / f"{loopctl.today_date()}.md").exists()
 
 
+def test_evening_without_project_pauses_all_active_registered_loops(monkeypatch, tmp_path):
+    repo = make_repo(tmp_path)
+    patch_engine(monkeypatch, tmp_path, repo)
+    loopctl.start_loop("demo")
+    assert loopctl.control_state("demo") == "active"
+    monkeypatch.setattr(loopctl, "send_notification", lambda *args, **kwargs: False)
+
+    loopctl.evening_command(None)
+
+    assert loopctl.control_state("demo") == "paused"
+
+
+def test_project_public_refs_do_not_expose_absolute_paths(tmp_path):
+    repo = tmp_path / "repo"
+    contract = repo / ".loop" / "contract.yaml"
+    cfg = {
+        "name": "Demo",
+        "repo_path": str(repo),
+        "github_repo": "owner/demo",
+        "pilot_branch": "loop/demo-pilot",
+        "contract_path": str(contract),
+    }
+
+    refs = loopctl.project_public_refs(cfg)
+
+    assert refs == {
+        "github_repo": "owner/demo",
+        "pilot_branch": "loop/demo-pilot",
+        "contract": ".loop/contract.yaml",
+    }
+    assert str(tmp_path) not in "\n".join(refs.values())
+
+
 def test_setup_writes_config_and_prompts_gh_action(monkeypatch, tmp_path, capsys):
     repo = make_repo(tmp_path)
     patch_engine(monkeypatch, tmp_path, repo)
