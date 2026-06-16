@@ -1808,14 +1808,17 @@ def codex_command(cwd: Path, output_path: Path, extra_writable: Path, agent_cfg:
 
 def claude_command(cwd: Path, extra_writable: Path, agent_cfg: dict | None = None) -> list[str]:
     agent_cfg = agent_cfg or {}
-    # Parity with codex_command's --sandbox clamp: never let registry config open
-    # the cage. Claude Code's headless sandbox confines reads/writes/Bash to cwd +
-    # --add-dir under the default modes, but `bypassPermissions` (or any unknown
-    # mode) removes that confinement entirely. An unattended loop must not allow it.
+    # Fail closed (parity with codex_command rejecting danger-full-access): an unsafe
+    # permission mode would disable Claude Code's working-dir sandbox in an unattended
+    # loop. Reject loudly rather than silently downgrade, so the operator's configured
+    # mode and the actual behavior never diverge.
     safe_permission_modes = ("default", "acceptEdits", "plan")
     permission_mode = str(agent_cfg.get("permission_mode") or "acceptEdits")
     if permission_mode not in safe_permission_modes:
-        permission_mode = "acceptEdits"
+        raise RuntimeError(
+            f"unsafe_permission_mode: {permission_mode!r} is not allowed for the claude provider; "
+            f"use one of {safe_permission_modes} (bypassPermissions would disable the worktree sandbox)"
+        )
     cmd = [
         resolve_agent_binary("claude", agent_cfg),
         "--print",

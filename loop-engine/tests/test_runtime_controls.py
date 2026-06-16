@@ -747,16 +747,14 @@ def test_verification_runner_uses_sandbox_and_strips_env(monkeypatch, tmp_path):
     assert "EXIT_CODE\n0" in log_path.read_text()
 
 
-def test_claude_command_clamps_bypass_permissions(tmp_path):
-    # Registry config must not be able to disable Claude Code's working-dir sandbox.
-    cmd = loopctl.claude_command(
-        tmp_path / "repo",
-        tmp_path / "run",
-        {"provider": "claude", "permission_mode": "bypassPermissions"},
-    )
-    idx = cmd.index("--permission-mode")
-    assert cmd[idx + 1] == "acceptEdits"
-    assert "bypassPermissions" not in cmd
+def test_claude_command_rejects_unsafe_permission_mode(tmp_path):
+    # Fail closed: an unsafe mode must raise, not silently downgrade.
+    with pytest.raises(RuntimeError, match="unsafe_permission_mode"):
+        loopctl.claude_command(
+            tmp_path / "repo",
+            tmp_path / "run",
+            {"provider": "claude", "permission_mode": "bypassPermissions"},
+        )
 
 
 def test_claude_command_allows_safe_permission_mode(tmp_path):

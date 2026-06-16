@@ -14,7 +14,7 @@ You operate it through the `loop` CLI (or `python3 loop-engine/bin/loopctl.py <c
 Before the human starts `loop` (especially unattended), tell them, plainly:
 
 1. The engine process runs with their **full OS user permissions** and reads their real secret files (`~/.config/loop/secrets`, `~/.ssh`, `~/.aws`, …) to scan for leaks.
-2. File access is confined per provider: **Codex** confines *writes* to the worktree (`--sandbox workspace-write`; reads stay broad); **Claude Code** confines reads, writes, and Bash to the worktree + run dir via its own headless sandbox — the engine clamps Claude's permission mode (refuses `bypassPermissions`) so config can't disable it. All agents get a scrubbed env (no secret env vars). `sandbox-exec` additionally wraps verification commands (network denied).
+2. File access is confined per provider: **Codex** confines *writes* to the worktree (`--sandbox workspace-write`; reads stay broad); **Claude Code** confines reads, writes, and Bash to the worktree + run dir via its own headless sandbox — the engine **rejects** unsafe permission modes for Claude (`bypassPermissions` raises an error) so config can't disable it. All agents get a scrubbed env (no secret env vars). `sandbox-exec` additionally wraps verification commands (network denied).
 3. A reviewer `pass` triggers **autonomous `gh pr merge`** into the pilot branch — there is **no human gate** between review-pass and merge.
 4. `loop start` runs **hourly, forever**, until `loop stop`; each passing cycle may create and merge a PR.
 5. **macOS only** (Codex or Claude Code, set per role — see Compatibility in the README). Without `sandbox-exec`, verification fails closed and no cycle can complete.
@@ -63,7 +63,7 @@ capability: Value-ranked, auditable, pausable coding-agent loop for local Git pr
 platform: macOS            # verification requires sandbox-exec; fails closed without it
 coding_agent: codex | claude   # per-role provider field (default codex); both route through one agent_exec() seam
 runtime: python>=3.11 (stdlib only)
-agents_config: 'registry.json -> agents.{planner|worker|reviewer}.{model: ..., [provider: codex|claude] optional, defaults to codex if absent}; claude permission_mode clamped (bypassPermissions refused); missing claude CLI -> missing_claude_cli RuntimeError at cycle time'
+agents_config: 'registry.json -> agents.{planner|worker|reviewer}.{model: ..., [provider: codex|claude] optional, defaults to codex if absent}; claude permission_mode validated, unsafe modes rejected (bypassPermissions raises); missing claude CLI -> missing_claude_cli RuntimeError at cycle time'
 
 commands:
   init:     { in: "product repo cwd", out: ".loop/contract.yaml + registry + pilot branch", fail: "LOOP_BLOCKED <reason>" }
@@ -92,7 +92,7 @@ auto_merge: true            # reviewer pass → gh pr merge --merge --delete-bra
 sandbox_scope:
   verification_commands: "sandbox-exec; network denied; secret dirs denied; scrubbed env"
   codex_agent:  "codex --sandbox workspace-write confines writes to worktree; reads broad; scrubbed env"
-  claude_agent: "Claude Code headless sandbox confines reads/writes/Bash to worktree + --add-dir; permission_mode clamped (no bypassPermissions); scrubbed env"
+  claude_agent: "Claude Code headless sandbox confines reads/writes/Bash to worktree + --add-dir; unsafe permission_mode rejected/raises (no bypassPermissions); scrubbed env"
 
 runtime_artifacts:          # git-ignored; never commit to a public repo
   state: loop-engine/state.json
