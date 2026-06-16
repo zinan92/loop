@@ -19,7 +19,8 @@ import urllib.request
 from pathlib import Path
 
 
-ENGINE_ROOT = Path(__file__).resolve().parents[1]
+SOURCE_ENGINE_ROOT = Path(__file__).resolve().parents[1]
+ENGINE_ROOT = SOURCE_ENGINE_ROOT
 REGISTRY_PATH = ENGINE_ROOT / "registry.json"
 STATE_PATH = ENGINE_ROOT / "state.json"
 LINEAR_GRAPHQL_URL = "https://api.linear.app/graphql"
@@ -735,7 +736,10 @@ def milestone_description(run_id: str, phase: str, tasks: list[dict] | None = No
 
 
 def render_template(name: str, values: dict[str, str]) -> str:
-    text = (ENGINE_ROOT / "prompts" / name).read_text()
+    path = ENGINE_ROOT / "prompts" / name
+    if not path.exists():
+        path = SOURCE_ENGINE_ROOT / "prompts" / name
+    text = path.read_text()
     for key, value in values.items():
         text = text.replace("{{" + key + "}}", value)
     return text
@@ -935,7 +939,12 @@ def default_agents(provider: str | None) -> dict:
             # Omit model so the Claude CLI uses its own current default (no staleable id).
             return {"provider": "claude", "reasoning_effort": "high", "timeout_seconds": timeout}
         return {"provider": "codex", "model": "gpt-5.5", "reasoning_effort": "high", "timeout_seconds": timeout}
-    return {"planner": role(600), "worker": role(900), "reviewer": role(600)}
+    return {
+        "pm_reviewer": role(900),
+        "planner": role(600),
+        "worker": role(900),
+        "reviewer": role(600),
+    }
 
 
 def bootstrap_project(cwd: Path) -> str:
@@ -3156,6 +3165,267 @@ def default_medium_allowed_files(cfg: dict) -> list[str]:
     return candidates or ["src/**", "tests/**", "README.md"]
 
 
+def pm_review_paths() -> dict[str, Path]:
+    md = dated_latest_paths("pm-reviews", ".md")
+    json_paths = dated_latest_paths("pm-reviews", ".json")
+    asset_dir = ENGINE_ROOT / "pm-reviews" / f"{today_date()}-assets"
+    return {
+        "dir": md["dir"],
+        "dated": md["dated"],
+        "latest": md["latest"],
+        "dated_json": json_paths["dated"],
+        "latest_json": json_paths["latest"],
+        "assets": asset_dir,
+        "snapshot": asset_dir / "portfolio-snapshot.json",
+        "analysis": asset_dir / "pm-analysis.md",
+        "agent_plan": asset_dir / "pm-plan.json",
+        "agent_output": asset_dir / "pm-review-last-message.md",
+    }
+
+
+def safe_repo_file_snapshot(repo_path: Path, rel_path: str, max_chars: int = 3000) -> str:
+    path = repo_path / rel_path
+    if not path.exists():
+        return f"{rel_path} missing."
+    return markdown_snapshot(
+        path,
+        repo_path,
+        rel_path,
+        f"{rel_path} missing.",
+        max_chars,
+    )
+
+
+def safe_git_status(repo_path: Path) -> str:
+    try:
+        status = git_status_short(repo_path)
+    except Exception as exc:
+        return f"git status unavailable: {exc}"
+    return status or "clean"
+
+
+def project_pm_snapshot(project: str, baseline_row: dict) -> dict:
+    cfg = registry_project(project)
+    repo_path = Path(cfg.get("repo_path") or "")
+    payload = status_payload(project)
+    return {
+        "project": project,
+        "name": cfg.get("name") or project,
+        "github_repo": cfg.get("github_repo"),
+        "pilot_branch": cfg.get("pilot_branch"),
+        "contract": safe_repo_file_snapshot(repo_path, ".loop/contract.yaml", max_chars=5000),
+        "readme": safe_repo_file_snapshot(repo_path, "README.md", max_chars=5000),
+        "git_status": safe_git_status(repo_path),
+        "verification_commands": cfg.get("verification_commands") or detect_verification_commands(repo_path),
+        "default_medium_allowed_files": default_medium_allowed_files(cfg),
+        "status": {
+            "loop_status": payload.get("status"),
+            "current_phase": payload.get("current_phase"),
+            "waiting_for_human": payload.get("waiting_for_human") or [],
+            "loop_policy": payload.get("loop_policy") or {},
+            "digest": payload.get("digest") or {},
+        },
+        "recent_runs_today": today_project_runs(project),
+        "baseline_pm_row": baseline_row,
+    }
+
+
+def pm_agent_config(projects: list[str]) -> dict:
+    for project in projects:
+        agents = registry_project(project).get("agents") or {}
+        for role in ("pm_reviewer", "pm", "planner"):
+            cfg = agents.get(role)
+            if cfg:
+                agent_cfg = dict(cfg)
+                agent_cfg.setdefault("timeout_seconds", 900)
+                return agent_cfg
+    return {"provider": load_config().get("default_provider") or "codex", "timeout_seconds": 900}
+
+
+def render_pm_review_prompt(snapshot: dict, review_dir: Path) -> str:
+    output_language = str(os.environ.get("LOOP_OUTPUT_LANGUAGE") or "English")
+    return render_template("pm_review.md", {
+        "TODAY": today_date(),
+        "REVIEW_DIR": str(review_dir),
+        "PM_REVIEW_SNAPSHOT": json.dumps(snapshot, ensure_ascii=False, indent=2),
+        "OUTPUT_LANGUAGE": output_language,
+    })
+
+
+def load_agent_pm_plan(path: Path) -> dict:
+    if not path.exists():
+        raise LoopBlocked(
+            "pm_review_missing_output",
+            "PM review agent did not write pm-plan.json; morning review cannot approve execution from a template.",
+            {"path": str(path)},
+        )
+    try:
+        data = json.loads(path.read_text())
+    except json.JSONDecodeError as exc:
+        raise LoopBlocked(
+            "pm_review_invalid_json",
+            f"PM review agent wrote invalid JSON: {exc}",
+            {"path": str(path)},
+        ) from exc
+    if not isinstance(data, dict):
+        raise LoopBlocked("pm_review_invalid_shape", "PM plan must be a JSON object", {"path": str(path)})
+    return data
+
+
+def clamp_score(value: object, default: int = 3) -> int:
+    try:
+        score = int(str(value).strip())
+    except (TypeError, ValueError):
+        score = default
+    return max(1, min(5, score))
+
+
+def clamp_cycles(value: object, default: int = 1) -> int:
+    try:
+        cycles = int(str(value).strip())
+    except (TypeError, ValueError):
+        cycles = default
+    return max(0, min(6, cycles))
+
+
+def normalize_pm_task(raw: dict, rank: int) -> dict:
+    risk = str(raw.get("risk") or "low").lower().strip()
+    if risk not in {"low", "medium", "high"}:
+        risk = "high"
+    return {
+        "rank": rank,
+        "task": str(raw.get("task") or raw.get("title") or "Clarify the next product improvement."),
+        "value_score": clamp_score(raw.get("value_score"), default=3),
+        "risk": risk,
+        "approval_path": str(raw.get("approval_path") or approval_path_for_risk(risk)),
+        "benefit": str(raw.get("benefit") or raw.get("user_benefit") or "Clarifies the product's next useful step."),
+        "category": str(raw.get("category") or "product_value"),
+        "surface": str(raw.get("surface") or "product"),
+    }
+
+
+def normalize_medium_envelope(raw: object, cfg: dict, row: dict, has_medium_task: bool) -> dict | None:
+    if not has_medium_task:
+        return None
+    envelope = raw if isinstance(raw, dict) else {}
+    name = str(envelope.get("name") or slugify_project_id(row.get("top_value_task") or "medium-risk")).strip()
+    allowed_files = envelope.get("allowed_files") if isinstance(envelope.get("allowed_files"), list) else []
+    verification_commands = (
+        envelope.get("verification_commands")
+        if isinstance(envelope.get("verification_commands"), list)
+        else []
+    )
+    forbidden_changes = (
+        envelope.get("forbidden_changes")
+        if isinstance(envelope.get("forbidden_changes"), list)
+        else []
+    )
+    return {
+        "name": name or "medium-risk",
+        "scope": str(envelope.get("scope") or row.get("top_value_task") or "Approved medium-risk product work for today."),
+        "allowed_files": [str(item).strip() for item in allowed_files if str(item).strip()] or default_medium_allowed_files(cfg),
+        "verification_commands": (
+            [str(item).strip() for item in verification_commands if str(item).strip()]
+            or cfg.get("verification_commands")
+            or detect_verification_commands(Path(cfg["repo_path"]))
+        ),
+        "forbidden_changes": [str(item).strip() for item in forbidden_changes if str(item).strip()] or [
+            "credentials/secrets/.env",
+            "launchd/cron/scheduler installation",
+            "deployment/publishing",
+            "destructive operations",
+            "cross-project permission expansion",
+        ],
+    }
+
+
+def normalize_pm_row(raw: dict, baseline: dict) -> dict:
+    cfg = registry_project(baseline["project"])
+    decision = str(raw.get("decision") or baseline.get("decision") or "plan-only").lower().strip()
+    if decision not in {"loop", "plan-only", "hold", "read-only"}:
+        decision = "plan-only"
+    raw_tasks = raw.get("tasks") if isinstance(raw.get("tasks"), list) else []
+    tasks = [
+        normalize_pm_task(task if isinstance(task, dict) else {}, index)
+        for index, task in enumerate(raw_tasks, start=1)
+    ] or baseline["tasks"]
+    tasks = sorted(tasks, key=lambda item: int(item["value_score"]), reverse=True)
+    for index, task in enumerate(tasks, start=1):
+        task["rank"] = index
+    top = tasks[0]
+    row = {
+        "project": baseline["project"],
+        "name": str(raw.get("name") or baseline.get("name") or baseline["project"]),
+        "decision": decision,
+        "today_focus": str(raw.get("today_focus") or top["task"]),
+        "top_value_task": str(raw.get("top_value_task") or top["task"]),
+        "top_risk": str(raw.get("top_risk") or top["risk"]).lower().strip(),
+        "approval_needed": str(raw.get("approval_needed") or approval_path_for_risk(top["risk"])),
+        "user_benefit": str(raw.get("user_benefit") or top["benefit"]),
+        "success_criteria": str(raw.get("success_criteria") or baseline.get("success_criteria")),
+        "reason": str(raw.get("reason") or baseline.get("reason")),
+        "recommended_cycles": clamp_cycles(raw.get("recommended_cycles"), default=baseline.get("recommended_cycles") or 1),
+        "stop_condition": str(raw.get("stop_condition") or baseline.get("stop_condition")),
+        "value_threshold": clamp_score(raw.get("value_threshold"), default=baseline.get("value_threshold") or DEFAULT_VALUE_THRESHOLD),
+        "medium_risk_question": str(raw.get("medium_risk_question") or ""),
+        "tasks": tasks,
+    }
+    if row["top_risk"] not in {"low", "medium", "high"}:
+        row["top_risk"] = top["risk"]
+    has_medium_task = any(task["risk"] == "medium" for task in tasks) or row["top_risk"] == "medium"
+    row["medium_envelope"] = normalize_medium_envelope(raw.get("medium_envelope"), cfg, row, has_medium_task)
+    if has_medium_task and not row["medium_risk_question"]:
+        row["medium_risk_question"] = (
+            f"Approve all medium-risk work for {row['project']} today if it stays inside "
+            f"the `{row['medium_envelope']['name']}` envelope?"
+        )
+    return row
+
+
+def normalize_pm_plan(plan: dict, baseline_rows: list[dict]) -> dict:
+    rows_by_project = {
+        str(row.get("project")): row
+        for row in plan.get("projects", [])
+        if isinstance(row, dict) and row.get("project")
+    }
+    normalized_rows = [
+        normalize_pm_row(rows_by_project.get(row["project"], {}), row)
+        for row in baseline_rows
+    ]
+    normalized_rows.sort(key=lambda row: int(row["tasks"][0]["value_score"]), reverse=True)
+    return {
+        "date": today_date(),
+        "summary": str(plan.get("summary") or "PM review ranked today's product opportunities by value."),
+        "projects": normalized_rows,
+        "questions_for_operator": [
+            str(item).strip()
+            for item in (plan.get("questions_for_operator") if isinstance(plan.get("questions_for_operator"), list) else [])
+            if str(item).strip()
+        ],
+    }
+
+
+def latest_pm_plan() -> dict:
+    path = pm_review_paths()["latest_json"]
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text())
+    except json.JSONDecodeError:
+        return {}
+    if data.get("date") != today_date():
+        return {}
+    return data
+
+
+def pm_row_for_project(project: str) -> dict:
+    plan = latest_pm_plan()
+    for row in plan.get("projects", []) if isinstance(plan.get("projects"), list) else []:
+        if row.get("project") == project:
+            return row
+    return project_pm_row(project)
+
+
 def proposed_tasks_for_project(project: str, cfg: dict, payload: dict) -> list[dict]:
     waiting = payload.get("waiting_for_human") or []
     tasks: list[dict] = []
@@ -3226,10 +3496,20 @@ def project_pm_row(project: str) -> dict:
     }
 
 
-def render_morning_review(rows: list[dict]) -> str:
+def render_morning_review(rows: list[dict], summary: str = "", questions: list[str] | None = None) -> str:
     date = today_date()
     lines = [
         f"# Daily PM Review - {date}",
+        "",
+        "Mode: PM-skill-driven",
+        "",
+        "This review ranks work by expected product value first. Risk controls approval path; it does not lower the rank of higher-value work.",
+        "",
+        "Full PM skill packages are strongly recommended as an upstream enhancement, but this review is self-contained and does not require external PM-skill installation.",
+        "",
+        "## PM Judgment",
+        "",
+        summary or "PM review ranked today's product opportunities by value.",
         "",
         "## Portfolio Board",
         "",
@@ -3255,6 +3535,24 @@ def render_morning_review(rows: list[dict]) -> str:
             )
             + " |"
         )
+    lines.extend([
+        "",
+        "## Medium-Risk Approval Questions",
+        "",
+    ])
+    medium_rows = [row for row in rows if row.get("medium_envelope")]
+    if not medium_rows:
+        lines.append("- No medium-risk blanket approval recommended today.")
+    for row in medium_rows:
+        envelope = row["medium_envelope"]
+        lines.extend([
+            f"- `{display_text(row['project'])}`: {display_text(row.get('medium_risk_question'), max_chars=260)}",
+            f"  - approve command: `loop approve {display_text(row['project'])} --approve-medium`",
+            f"  - envelope: `{display_text(envelope.get('name'))}`",
+            f"  - scope: {display_text(envelope.get('scope'), max_chars=260)}",
+            f"  - allowed_files: {display_text(', '.join(envelope.get('allowed_files') or []), max_chars=260)}",
+            f"  - verification: {display_text('; '.join(envelope.get('verification_commands') or []), max_chars=260)}",
+        ])
     lines.extend([
         "",
         "## Ranked Development Tasks",
@@ -3297,8 +3595,15 @@ def render_morning_review(rows: list[dict]) -> str:
         "",
         "## Questions for Operator",
         "",
-        "- Which projects should run today?",
-        "- For each medium-risk top item, approve a narrow envelope with allowed files and verification commands before `loop start-day`.",
+    ])
+    if questions:
+        lines.extend(f"- {display_text(question, max_chars=260)}" for question in questions)
+    else:
+        lines.extend([
+            "- Which projects should run today?",
+            "- For each medium-risk top item, approve the recommended envelope before `loop start-day`.",
+        ])
+    lines.extend([
         "",
         "## Tomorrow Carry-Forward",
         "",
@@ -3308,14 +3613,47 @@ def render_morning_review(rows: list[dict]) -> str:
 
 
 def write_morning_review(projects: list[str] | None = None) -> dict:
-    rows = [project_pm_row(project) for project in registered_project_ids(projects)]
-    rows.sort(key=lambda row: int(row["tasks"][0]["value_score"]), reverse=True)
-    paths = dated_latest_paths("pm-reviews")
-    text = render_morning_review(rows)
+    project_ids = registered_project_ids(projects)
+    baseline_rows = [project_pm_row(project) for project in project_ids]
+    baseline_rows.sort(key=lambda row: int(row["tasks"][0]["value_score"]), reverse=True)
+    paths = pm_review_paths()
+    snapshot = {
+        "date": today_date(),
+        "projects": [
+            project_pm_snapshot(row["project"], row)
+            for row in baseline_rows
+        ],
+        "previous_evening_scorecard": markdown_snapshot(
+            ENGINE_ROOT / "evening-scorecards" / "latest.md",
+            ENGINE_ROOT,
+            "Evening scorecard",
+            "No previous evening scorecard found.",
+            6000,
+        ),
+    }
     paths["dir"].mkdir(parents=True, exist_ok=True)
+    paths["assets"].mkdir(parents=True, exist_ok=True)
+    paths["snapshot"].write_text(json.dumps(snapshot, ensure_ascii=False, indent=2) + "\n")
+    prompt = render_pm_review_prompt(snapshot, paths["assets"])
+    cwd = ENGINE_ROOT
+    agent_exec(
+        prompt,
+        cwd,
+        paths["agent_output"],
+        paths["assets"],
+        pm_agent_config(project_ids),
+    )
+    plan = normalize_pm_plan(load_agent_pm_plan(paths["agent_plan"]), baseline_rows)
+    text = render_morning_review(
+        plan["projects"],
+        summary=plan.get("summary", ""),
+        questions=plan.get("questions_for_operator") or [],
+    )
+    paths["dated_json"].write_text(json.dumps(plan, ensure_ascii=False, indent=2) + "\n")
+    paths["latest_json"].write_text(json.dumps(plan, ensure_ascii=False, indent=2) + "\n")
     paths["dated"].write_text(text)
     paths["latest"].write_text(text)
-    return {"rows": rows, "paths": paths, "markdown": text}
+    return {"rows": plan["projects"], "paths": paths, "markdown": text, "plan": plan}
 
 
 def load_latest_approvals() -> dict:
@@ -3389,6 +3727,8 @@ def render_daily_focus(
         lines.extend([
             f"preapproved_medium_risk: {medium_envelope['name']}",
             "preapproved_medium_risk_supervised_first_run: true",
+            "preapproved_medium_risk_approval: all_medium_risk_items_today_within_envelope",
+            f"preapproved_medium_risk_scope: {medium_envelope.get('scope') or row.get('today_focus')}",
             "preapproved_medium_risk_allowed_files:",
         ])
         lines.extend(f"- {item}" for item in medium_envelope.get("allowed_files") or default_medium_allowed_files(cfg))
@@ -3417,7 +3757,7 @@ def render_daily_focus(
 
 
 def write_daily_focus(project: str, cfg: dict, medium_envelope: dict | None = None) -> dict[str, Path]:
-    row = project_pm_row(project)
+    row = pm_row_for_project(project)
     focus_dir = Path(cfg["repo_path"]) / ".loop" / "daily-focus"
     focus_dir.mkdir(parents=True, exist_ok=True)
     dated = focus_dir / f"{today_date()}.md"
@@ -3544,6 +3884,7 @@ def approve_command(
     medium_envelope_name: str | None,
     allowed_files: list[str],
     verification_commands: list[str],
+    approve_medium: bool = False,
     start_after: bool = False,
 ) -> None:
     resolved = resolve_project(cwd, project=project, bootstrap=False)
@@ -3555,6 +3896,24 @@ def approve_command(
             "allowed_files": allowed_files or default_medium_allowed_files(cfg),
             "verification_commands": verification_commands or cfg.get("verification_commands") or detect_verification_commands(Path(cfg["repo_path"])),
             "supervised_first_run": True,
+            "scope": "Operator-approved medium-risk work for today.",
+        }
+    elif approve_medium:
+        row = pm_row_for_project(resolved)
+        recommended = row.get("medium_envelope") if isinstance(row, dict) else None
+        if not recommended:
+            raise LoopBlocked(
+                "no_medium_envelope_recommended",
+                f"Morning PM review did not recommend a medium-risk envelope for {resolved!r}; pass --medium-envelope explicitly if you want to approve one.",
+            )
+        medium_envelope = {
+            "name": recommended["name"],
+            "allowed_files": recommended.get("allowed_files") or default_medium_allowed_files(cfg),
+            "verification_commands": recommended.get("verification_commands") or cfg.get("verification_commands") or detect_verification_commands(Path(cfg["repo_path"])),
+            "supervised_first_run": True,
+            "scope": recommended.get("scope") or "Morning-approved medium-risk work for today.",
+            "forbidden_changes": recommended.get("forbidden_changes") or [],
+            "source": "morning_pm_review",
         }
     focus_paths = write_daily_focus(resolved, cfg, medium_envelope=medium_envelope)
     approvals = load_latest_approvals()
@@ -3563,12 +3922,14 @@ def approve_command(
         "project": resolved,
         "daily_focus": {key: str(value) for key, value in focus_paths.items()},
         "medium_envelope": medium_envelope,
+        "medium_auto_approved_for_day": bool(medium_envelope),
     }
     approvals.setdefault("rejected", {}).pop(resolved, None)
     write_approvals(approvals)
     print(f"LOOP_APPROVED project={resolved} daily_focus={focus_paths['latest']}")
     if medium_envelope:
         print(f"MEDIUM_ENVELOPE {medium_envelope['name']} supervised_first_run=true")
+        print("MEDIUM_RISK_APPROVED_FOR_DAY all_items_within_envelope=true")
     if start_after:
         start_day_command([resolved])
 
@@ -4570,6 +4931,7 @@ def main() -> int:
     morning_parser.add_argument("--start", action="store_true")
     approve_parser = sub.add_parser("approve")
     approve_parser.add_argument("--project")
+    approve_parser.add_argument("--approve-medium", action="store_true")
     approve_parser.add_argument("--medium-envelope")
     approve_parser.add_argument("--allowed-file", action="append", default=[])
     approve_parser.add_argument("--verification-command", action="append", default=[])
@@ -4653,6 +5015,7 @@ def main() -> int:
                 args.medium_envelope,
                 args.allowed_file,
                 args.verification_command,
+                approve_medium=args.approve_medium,
                 start_after=args.start,
             )
         elif args.command == "reject":

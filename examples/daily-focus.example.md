@@ -31,6 +31,8 @@ allow_do_nothing: true
 max_noop_cycles: 1
 preapproved_medium_risk: primary-surface-improvement
 preapproved_medium_risk_supervised_first_run: true
+preapproved_medium_risk_approval: all_medium_risk_items_today_within_envelope
+preapproved_medium_risk_scope: user-visible product-surface behavior for the ranked item above
 preapproved_medium_risk_allowed_files:
 - src/**
 - web/**

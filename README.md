@@ -113,9 +113,11 @@ loop init --provider codex           # or: --provider claude
 loop status
 
 # 5) Morning PM review across registered projects
-loop morning                         # writes pm-reviews/YYYY-MM-DD.md + latest.md
-loop approve <project>               # writes <repo>/.loop/daily-focus/latest.md
-# For medium-risk work:
+loop morning                         # PM-agent review; writes pm-reviews/YYYY-MM-DD.{md,json}
+loop approve <project>               # approve low-risk automatic work only
+# To approve every medium-risk item today inside the PM-recommended envelope:
+loop approve <project> --approve-medium
+# Or override the envelope manually:
 loop approve <project> --medium-envelope primary-surface \
   --allowed-file 'src/**' --allowed-file 'tests/**' \
   --verification-command 'git diff --check'
@@ -157,20 +159,23 @@ By default **only the top-ranked auto-runnable task executes per cycle** (`max_t
 `loop` now owns the full daily routine: **morning review → approvals → day loop → evening recap**. The loop still keeps the human in charge of direction: morning review proposes and ranks work; only `loop approve` turns it into execution input.
 
 **Morning — decide value, then approve:**
-1. `loop morning [project...]` scans registered projects, reads current loop state/digests, ranks value-first work, assigns low/medium/high risk, and writes:
+1. `loop morning [project...]` runs the built-in PM Review Agent over registered project snapshots, reads current loop state/digests/evening scorecards, ranks value-first work, assigns low/medium/high risk, and writes:
    - `loop-engine/pm-reviews/YYYY-MM-DD.md`
    - `loop-engine/pm-reviews/latest.md`
+   - `loop-engine/pm-reviews/YYYY-MM-DD.json`
+   - `loop-engine/pm-reviews/latest.json`
 2. `loop approve <project>` writes that project's approved focus to:
    - `<product-repo>/.loop/daily-focus/YYYY-MM-DD.md`
    - `<product-repo>/.loop/daily-focus/latest.md`
    - `loop-engine/approvals/YYYY-MM-DD.{json,md}`
-3. Medium-risk work requires an explicit envelope:
+3. Medium-risk work is approved once in the morning, for the whole day, inside a bounded envelope:
+   - recommended: `loop approve <project> --approve-medium`
    - `loop approve <project> --medium-envelope <name> --allowed-file ... --verification-command ...`
 
 **Day — execute only approved work:**
 1. `loop start-day [project...]` starts approved projects only.
 2. Low-risk work may run unattended after value/verification gates.
-3. Medium-risk work runs its first cycle with `supervised=true`, then continues hourly only if that first cycle does not leave `waiting_for_human`.
+3. Medium-risk work may run unattended only when it matches the morning-approved envelope. The first medium-risk execution runs with `supervised=true`, then continues hourly only if that first cycle does not leave `waiting_for_human`.
 4. Budgets and stop rules come from daily focus: `recommended_cycles`, `stop_condition`, `value_threshold`, `max_noop_cycles`.
 
 **Evening — stop, recap, score:**
@@ -183,20 +188,21 @@ By default **only the top-ranked auto-runnable task executes per cycle** (`max_t
 
 ### PM skill integration / PM skill 集成
 
-No external PM skill is required: `loop morning` is the built-in baseline PM review. For stronger product judgment, you can run your own PM skill or product-planning workflow before approval, as long as it writes the same handoff artifacts that `loop` understands:
+No external PM skill is required: `loop morning` has a built-in PM Review Agent and is self-contained. However, installing a full PM skill package is **strongly recommended** for operators who want deeper discovery, user research, opportunity mapping, or roadmap synthesis before approval. External PM skills can enhance the same handoff artifacts that `loop` understands:
 
 - `loop-engine/pm-reviews/latest.md`
+- `loop-engine/pm-reviews/latest.json`
 - `<product-repo>/.loop/daily-focus/latest.md`
 - `loop-engine/approvals/latest.json`
 
-In short: PM skills are optional power-ups, not runtime dependencies.
+In short: PM skills are strongly recommended power-ups, not runtime dependencies.
 
 ---
 
 ## Risk model / 风险模型
 
 - **Low-risk** (tests, docs, CLI/digest wording, deterministic parsing, small observability/refactors) → may run unattended **after** value + verification gates pass.
-- **Medium-risk** (visible local UI, small product-surface behavior, payload/schema changes with tests, single-module refactors) → needs a **preapproved envelope** in daily-focus **and** `loop run-now --supervised` for the first execution.
+- **Medium-risk** (visible local UI, small product-surface behavior, payload/schema changes with tests, single-module refactors) → can be approved once each morning with `loop approve <project> --approve-medium`; every task must stay inside that day's code-enforced envelope, and the first execution is supervised.
 - **High-risk** (credentials/secrets/`.env`, external auth, launchd/cron, publishing/deploy, destructive ops, money/trading, broad rewrites, cross-project permission expansion) → **stays manual, never auto-executed.**
 
 ## Value line / 价值线
@@ -292,7 +298,7 @@ Per-item `waiting_for_human[].reason`:
 | `no_candidate_over_value_line` | nothing cleared the value threshold (when do-nothing is disabled) | lower `value_threshold` in daily-focus, or accept the no-op |
 | `blocked_category` | issue text matched a blocked keyword category | review the issue file under `runs/<id>/issues/`; reword or preapprove → `loop resume` |
 | `untrusted_verification` | a verification command isn't in the contract's trusted set | add it to `.loop/contract.yaml`, or run it manually → `loop resume` |
-| `medium_risk_requires_approval` / `medium_risk_requires_supervised_run` | a medium-risk item needs an envelope + supervised run | add a `preapproved_medium_risk` envelope to daily-focus → `loop run-now --supervised` |
+| `medium_risk_requires_approval` / `medium_risk_requires_supervised_run` | a medium-risk item needs today's envelope + first supervised run | run `loop approve <project> --approve-medium` if morning recommended it, or approve a manual envelope; first run uses `--supervised` |
 | `medium_envelope_violation` | the medium-risk task exceeded its envelope (files/commands) | tighten the issue or widen the envelope deliberately |
 | `high_risk_requires_approval` | a high-risk candidate was surfaced | stays manual — never auto-run |
 | `unsupported_risk` | the issue's risk field wasn't `low` or `medium` | fix the issue's `## Risk` |

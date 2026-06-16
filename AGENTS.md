@@ -27,7 +27,8 @@ Before the human starts `loop` (especially unattended), tell them, plainly:
   - `waiting_for_human` → `null`, or `{ "reason": <code>, "issue_path": <path> }`
   - `runs[-1].status` → `merged | no_op | needs_human | failed | ...`
 - **Read the recap from a file**, not by re-running digest: `loop-engine/reports/<project>/latest.md`.
-- **Start each day with PM review:** `loop morning` writes `pm-reviews/YYYY-MM-DD.md`; `loop approve <project>` writes the project's `.loop/daily-focus/latest.md`.
+- **Start each day with PM review:** `loop morning` runs the PM Review Agent and writes `pm-reviews/YYYY-MM-DD.{md,json}`; `loop approve <project>` writes the project's `.loop/daily-focus/latest.md`.
+- **Approve medium risk once per day:** when morning recommends a bounded envelope, `loop approve <project> --approve-medium` approves all same-day medium-risk items that stay inside that envelope. Do not approve medium risk item-by-item inside each cycle.
 - **Start approved projects only:** `loop start-day` reads `approvals/latest.json`; it refuses projects not approved today.
 - **Trigger one cycle:** `loop run-now` (add `--supervised` only when a preapproved medium-risk envelope exists for the queued work).
 - **End the day:** `loop evening` pauses all active registered loops when no project args are given, refreshes digests, and writes `evening-scorecards/YYYY-MM-DD.md`.
@@ -43,7 +44,7 @@ Before the human starts `loop` (especially unattended), tell them, plainly:
 | `no_candidate_over_value_line` | nothing cleared `value_threshold` (when do-nothing is off) | lower the threshold, or accept the no-op |
 | `blocked_category` | issue matched a blocked keyword category | review `runs/<id>/issues/*.md`; reword or preapprove; `loop resume` |
 | `untrusted_verification` | a verification command isn't in the contract's trusted set | add to `.loop/contract.yaml` or verify manually; `loop resume` |
-| `medium_risk_requires_approval` / `medium_risk_requires_supervised_run` | medium-risk item needs an envelope + supervised run | add `preapproved_medium_risk` to daily-focus; `loop run-now --supervised` |
+| `medium_risk_requires_approval` / `medium_risk_requires_supervised_run` | medium-risk item needs today's envelope + first supervised run | use `loop approve <project> --approve-medium` if morning recommended it, or approve a manual envelope; first run is supervised |
 | `medium_envelope_violation` | medium task exceeded its envelope | tighten the issue or widen the envelope deliberately |
 | `high_risk_requires_approval` | a high-risk candidate was surfaced | stays manual — never auto-run |
 | `unsupported_risk` | issue risk field wasn't `low` or `medium` | fix the issue's `## Risk` |
@@ -72,8 +73,8 @@ output_language: 'registry.json project field (or LOOP_OUTPUT_LANGUAGE env); def
 commands:
   setup:    { in: "operator machine", out: "~/.config/loop/config.json + missing-action prompts" }
   init:     { in: "product repo cwd", out: ".loop/contract.yaml + registry + pilot branch", fail: "LOOP_BLOCKED <reason>" }
-  morning:  { in: "registered projects", out: "pm-reviews/YYYY-MM-DD.md + latest.md, value-ranked portfolio board" }
-  approve:  { in: "project [--medium-envelope ...]", out: ".loop/daily-focus/latest.md + approvals/latest.json" }
+  morning:  { in: "registered projects", out: "pm-reviews/YYYY-MM-DD.{md,json} + latest.{md,json}, PM-agent value-ranked portfolio board" }
+  approve:  { in: "project [--approve-medium | --medium-envelope ...]", out: ".loop/daily-focus/latest.md + approvals/latest.json" }
   reject:   { in: "project", out: "approvals/latest.json rejection record" }
   start-day: { in: "today's approved projects", out: "approved loops active; medium first run supervised" }
   evening:  { in: "projects or all active/approved projects", out: "evening-scorecards/YYYY-MM-DD.md + reports/daily/YYYY-MM-DD.md/html" }
@@ -91,7 +92,7 @@ commands:
 gates:                      # in cycle order
   - value_line: value_score >= value_threshold (default 3), else no-op
   - do_nothing: after max_noop_cycles (default 2) consecutive no-ops, auto-pause
-  - risk_envelope: non-low/medium risk gated (unsupported_risk); medium needs --supervised + preapproved envelope; high never auto-runs
+  - risk_envelope: non-low/medium risk gated (unsupported_risk); medium needs same-day preapproved envelope and first supervised run; high never auto-runs
   - blocked_category: keyword scan of issue intent over 7 categories -> gate to human
   - untrusted_verification: issue verification commands must match the contract's trusted set
   - higher_value_blocker: a waiting higher-value item blocks lower-value work
@@ -99,7 +100,7 @@ gates:                      # in cycle order
   - worker_internal: verification under sandbox-exec (network denied) + Allowed-Files allowlist + secret-leak scan (all fail-closed)
   - reviewer: REVIEW_STATUS must be exactly pass | fail | needs_human
 
-auto_execute: { low: true, medium: "supervised + envelope only", high: false }
+auto_execute: { low: true, medium: "same-day morning envelope + first supervised execution", high: false }
 auto_merge: true            # reviewer pass → gh pr merge --merge --delete-branch (no human gate)
 
 sandbox_scope:
@@ -111,6 +112,7 @@ runtime_artifacts:          # git-ignored; never commit to a public repo
   state: loop-engine/state.json
   runs: loop-engine/runs/<run_id>/
   pm_review: loop-engine/pm-reviews/latest.md
+  pm_review_plan: loop-engine/pm-reviews/latest.json
   approvals: loop-engine/approvals/latest.json
   evening_scorecard: loop-engine/evening-scorecards/latest.md
   digest: loop-engine/reports/<project>/latest.md
