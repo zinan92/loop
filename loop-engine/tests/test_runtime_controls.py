@@ -768,7 +768,7 @@ def test_claude_command_allows_safe_permission_mode(tmp_path):
     cmd = loopctl.claude_command(
         tmp_path / "repo",
         tmp_path / "run",
-        {"provider": "claude", "permission_mode": "plan"},
+        {"provider": "claude", "permission_mode": "plan", "command": "/usr/bin/claude"},
     )
     idx = cmd.index("--permission-mode")
     assert cmd[idx + 1] == "plan"
