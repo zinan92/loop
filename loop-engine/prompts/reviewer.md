@@ -30,4 +30,5 @@ REVIEW_STATUS: pass
 REVIEW_STATUS: fail
 REVIEW_STATUS: needs_human
 
-Then include concise findings and evidence.
+Then include concise findings and evidence, written in {{OUTPUT_LANGUAGE}}.
+The REVIEW_STATUS line above must stay exactly in English (the engine parses it).

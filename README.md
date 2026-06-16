@@ -204,6 +204,20 @@ Quick orientation for an operating agent:
 | `LOOP_LINEAR_TEAM_KEY` | Linear team key, e.g. `ENG` |
 | `LOOP_LINEAR_TEAM_NAME` | Human-readable Linear team name |
 
+### Output language / 输出语言
+
+By default the loop generates artifacts in **English**. Set `output_language` on a project
+(in `registry.json`, e.g. `"output_language": "Simplified Chinese"`) — or the
+`LOOP_OUTPUT_LANGUAGE` env var — and the engine asks the agent to write generated **prose**
+(issues, candidates, strategy brief, elicitation questions, worker/reviewer reports) in that
+language.
+
+**By design, structural Markdown headers (`## Risk`, `## Allowed Files`, …) and machine tokens
+(`REVIEW_STATUS`, the `low`/`medium`/`high` risk values) stay in English** — the engine parses
+them, and localizing them would break the safety gates. A non-English run therefore produces
+localized prose inside an English structural skeleton. Prose localization is best-effort by the
+coding agent; the engine guarantees the structure and parsing, not translation quality.
+
 ### Per-role agent provider / 按角色配 agent
 
 Each role can run on a different provider via the `agents` block in `registry.json`:

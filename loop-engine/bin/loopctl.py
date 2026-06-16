@@ -945,6 +945,7 @@ def bootstrap_project(cwd: Path) -> str:
         "team": linear["team"],
         "verification_commands": verification_commands,
         "auto_execute_risk": "low",
+        "output_language": "English",
         "auto_approval": {
             "silent_approval_after_minutes": 30,
             "only_if_risk": "low",
@@ -2531,6 +2532,7 @@ def base_prompt_values(project: str, cfg: dict, run_dir: Path) -> dict[str, str]
         "LOOP_MEMORY": loop_memory_snapshot(project),
         "DAILY_FOCUS": daily_focus_snapshot(cfg),
         "HUMAN_FEEDBACK": human_feedback_snapshot(project),
+        "OUTPUT_LANGUAGE": str(cfg.get("output_language") or os.environ.get("LOOP_OUTPUT_LANGUAGE") or "English"),
     }
 
 

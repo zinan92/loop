@@ -64,6 +64,7 @@ platform: macOS            # verification requires sandbox-exec; fails closed wi
 coding_agent: codex | claude   # per-role provider field (default codex); both route through one agent_exec() seam
 runtime: python>=3.11 (stdlib only)
 agents_config: 'registry.json -> agents.{planner|worker|reviewer}.{model: ..., [provider: codex|claude] optional, defaults to codex if absent}; claude permission_mode validated, unsafe modes rejected (bypassPermissions raises); missing claude CLI -> missing_claude_cli RuntimeError at cycle time'
+output_language: 'registry.json project field (or LOOP_OUTPUT_LANGUAGE env); default English. Localizes generated PROSE only; structural headers + machine tokens (REVIEW_STATUS, risk low/medium/high) STAY English by design because the engine parses them. Prose localization is best-effort by the agent.'
 
 commands:
   init:     { in: "product repo cwd", out: ".loop/contract.yaml + registry + pilot branch", fail: "LOOP_BLOCKED <reason>" }

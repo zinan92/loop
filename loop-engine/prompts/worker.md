@@ -22,7 +22,8 @@ Hard rules:
   integrations.
 - Keep the change minimal.
 - Run the verification commands from the issue.
-- Write a concise report to {{RUN_DIR}}/worker-report.md.
+- Write a concise report to {{RUN_DIR}}/worker-report.md, with its prose in {{OUTPUT_LANGUAGE}}.
+- Write code and code comments to match the target repo's existing conventions; do not force {{OUTPUT_LANGUAGE}} onto code.
 - Do not create or merge PRs.
 - Do not edit files outside the worktree except the worker report.
 

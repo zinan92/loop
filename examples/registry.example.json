@@ -19,6 +19,7 @@
         "comment_on_control_issue": true
       },
       "team": "ENG",
+      "output_language": "English",
       "verification_commands": [
         "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q"
       ],

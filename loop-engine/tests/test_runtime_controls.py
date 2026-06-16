@@ -779,3 +779,14 @@ def test_scan_reads_secrets_from_configurable_dir(monkeypatch, tmp_path):
     (wt / "leak.txt").write_text("oops SUPERSECRETVALUE123 here")
     findings = loopctl.scan_changed_for_secrets(wt, ["leak.txt"])
     assert findings
+
+
+def test_output_language_flows_into_prompt(tmp_path):
+    # config field -> OUTPUT_LANGUAGE, default English, and it renders into the prompt.
+    cfg = {"name": "Demo", "output_language": "Simplified Chinese"}
+    vals = loopctl.base_prompt_values("demo", cfg, tmp_path)
+    assert vals["OUTPUT_LANGUAGE"] == "Simplified Chinese"
+    assert loopctl.base_prompt_values("demo", {"name": "Demo"}, tmp_path)["OUTPUT_LANGUAGE"] == "English"
+    rendered = loopctl.render_template("planner.md", vals)
+    assert "Simplified Chinese" in rendered
+    assert "{{OUTPUT_LANGUAGE}}" not in rendered

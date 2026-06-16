@@ -29,6 +29,17 @@ Loop memory from previous cycles:
 
 {{LOOP_MEMORY}}
 
+Output language:
+- Write all human-readable PROSE in {{OUTPUT_LANGUAGE}} — the body of candidates.md,
+  strategy-brief.md, elicitation-questions.md, and the Goal / Context / Before /
+  After / User benefit descriptions inside issue files.
+- ALWAYS keep these in English exactly as shown, regardless of {{OUTPUT_LANGUAGE}},
+  because the engine parses them: every Markdown section header (## Risk, ## Goal,
+  ## Allowed Files, ## Out Of Scope, ## Definition Of Done, ## Verification Commands,
+  ## Product Impact, ## Reviewer Checklist); all candidates.json keys; the risk
+  values low / medium / high; and the output file names.
+- If {{OUTPUT_LANGUAGE}} is English this changes nothing.
+
 Read the project contract and inspect the repo only enough to choose useful,
 bounded improvements.
 
