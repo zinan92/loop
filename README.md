@@ -12,7 +12,7 @@
 [![Platform](https://img.shields.io/badge/platform-macOS-lightgrey.svg)](#compatibility--兼容性)
 [![Coding agent](https://img.shields.io/badge/coding%20agent-Codex%20%2B%20Claude-black.svg)](#compatibility--兼容性)
 
-[📊 Visual flow / 可视化流程图](docs/flow.html) · [🤖 For AI agents / 给 AI agent](AGENTS.md)
+[📊 Visual flow / 可视化流程图](https://zinan92.github.io/loop/flow.html) · [🤖 For AI agents / 给 AI agent](AGENTS.md)
 
 </div>
 
@@ -126,8 +126,8 @@ To run continuously: `loop start` (hourly, immediate first cycle) → `loop stat
 
 ## How a cycle works / 一轮 cycle 做什么
 
-> 完整可视化见 **[docs/flow.html](docs/flow.html)**（给人看的图）。下面是文字版。
-> Full visual in **[docs/flow.html](docs/flow.html)**. Text version:
+> 完整可视化见 **[docs/flow.html](https://zinan92.github.io/loop/flow.html)**（给人看的图）。下面是文字版。
+> Full visual in **[docs/flow.html](https://zinan92.github.io/loop/flow.html)**. Text version:
 
 ```text
 trigger (run-now | hourly tick)

@@ -1,6 +1,6 @@
 # AGENTS.md — operating `loop` as an AI agent
 
-> 这是给 **AI agent** 读的操作契约（人看的总览在 [README.md](README.md)，可视化在 [docs/flow.html](docs/flow.html)）。
+> 这是给 **AI agent** 读的操作契约（人看的总览在 [README.md](README.md)，可视化在 [docs/flow.html](https://zinan92.github.io/loop/flow.html)）。
 > You are likely a coding agent (Codex CLI or Claude Code — both supported, set per role) asked to operate `loop` for a human, or to explain it to them. This file is the contract: commands, state, gates, and what you must escalate. Everything here is verifiable in `loop-engine/bin/loopctl.py`.
 
 ## What loop is (for you)
