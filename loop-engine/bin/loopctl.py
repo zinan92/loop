@@ -26,8 +26,14 @@ DEFAULT_CADENCE_SECONDS = 60 * 60
 LOCK_DIR = ENGINE_ROOT / "locks"
 LAUNCH_AGENT_DIR = Path.home() / "Library" / "LaunchAgents"
 LAUNCH_LABEL_PREFIX = "com.agent-loop"
+# Where the engine reads the operator's real secret values to scan worker diffs for
+# leaks. Env-configurable (LOOP_SECRETS_DIR) so adopters point it at their own secret
+# store instead of a hardcoded personal path; default ~/.config/loop/secrets.
+SECRETS_DIR = Path(
+    os.environ.get("LOOP_SECRETS_DIR", str(Path.home() / ".config" / "loop" / "secrets"))
+).expanduser()
 SECRET_DENY_DIRS = [
-    Path.home() / ".config" / "loop" / "secrets",
+    SECRETS_DIR,
     Path.home() / ".ssh",
     Path.home() / ".aws",
     Path.home() / ".config" / "gh",
@@ -1347,7 +1353,7 @@ def scan_changed_for_secrets(worktree_path: Path, changed: list[str]) -> list[st
     """Block the read-and-launder vector: a changed file must not contain known
     secret values or credential markers. Fails closed."""
     secret_values: set[str] = set()
-    secrets_dir = Path.home() / ".config" / "loop" / "secrets"
+    secrets_dir = SECRETS_DIR
     if secrets_dir.exists():
         for sf in secrets_dir.iterdir():
             try:

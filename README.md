@@ -8,7 +8,7 @@
 
 [![Python](https://img.shields.io/badge/python-3.11+-blue.svg)](https://python.org)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-76%20passing-brightgreen.svg)](loop-engine/tests)
+[![Tests](https://img.shields.io/badge/tests-77%20passing-brightgreen.svg)](loop-engine/tests)
 [![Platform](https://img.shields.io/badge/platform-macOS-lightgrey.svg)](#compatibility--兼容性)
 [![Coding agent](https://img.shields.io/badge/coding%20agent-Codex%20%2B%20Claude-black.svg)](#compatibility--兼容性)
 
@@ -91,7 +91,7 @@ If any of `gh` auth / GitHub remote / git repo is missing, `loop init` **fails c
 ## Quick start / 快速开始
 
 ```bash
-# 1) Clone + run the test suite (expect: 76 passed)
+# 1) Clone + run the test suite (expect: 77 passed)
 git clone https://github.com/zinan92/loop.git
 cd loop
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest loop-engine/tests -q
@@ -259,7 +259,7 @@ loop/
 │   ├── bin/           ← loopctl.py (engine) + loop (wrapper)
 │   ├── prompts/       ← planner / worker / reviewer prompts (agent-agnostic)
 │   ├── scheduler/
-│   └── tests/         ← 76 passing
+│   └── tests/         ← 77 passing
 └── .gitignore
 ```
 

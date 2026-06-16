@@ -765,3 +765,17 @@ def test_claude_command_allows_safe_permission_mode(tmp_path):
     )
     idx = cmd.index("--permission-mode")
     assert cmd[idx + 1] == "plan"
+
+
+def test_scan_reads_secrets_from_configurable_dir(monkeypatch, tmp_path):
+    # LOOP_SECRETS_DIR indirection: the leak scan must read secret values from the
+    # configured SECRETS_DIR, not a hardcoded path.
+    secrets = tmp_path / "secrets"
+    secrets.mkdir()
+    (secrets / "k").write_text("SUPERSECRETVALUE123")
+    monkeypatch.setattr(loopctl, "SECRETS_DIR", secrets)
+    wt = tmp_path / "wt"
+    wt.mkdir()
+    (wt / "leak.txt").write_text("oops SUPERSECRETVALUE123 here")
+    findings = loopctl.scan_changed_for_secrets(wt, ["leak.txt"])
+    assert findings
