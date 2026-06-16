@@ -3,7 +3,7 @@
 Run: python3 -m pytest loop-engine/tests/test_safety.py -v
 (from the repo root)
 
-Covers the two blockers Park flagged plus the round-1/2/3 hardening:
+Covers the two pre-release blockers plus the round-1/2/3 hardening:
   B1  blocked-keyword scan must ignore the "Out Of Scope" section
   B2  candidates.json issue_path must be confined to run_dir/issues/issue-NNN.md
   + Allowed-Files allowlist hardening, secret-laundering scan, sandbox clamp.

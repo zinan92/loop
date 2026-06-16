@@ -21,3 +21,13 @@ loop-engine/evening-scorecards/*
 # Project-specific local scheduler helpers are generated runtime files.
 loop-engine/scheduler/run-*-cycle.sh
 loop-engine/scheduler/run-*-unattended-*.sh
+
+# python tooling
+.pytest_cache/
+.coverage
+htmlcov/
+*.egg-info/
+dist/
+build/
+venv/
+.venv/
