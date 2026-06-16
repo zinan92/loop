@@ -58,7 +58,7 @@ def make_repo(tmp_path):
     return repo
 
 
-def fake_pm_agent_plan(project="demo", envelope_name="primary-surface"):
+def fake_pm_agent_plan(project="demo", envelope_name="primary-surface", envelope_commands=None):
     return {
         "date": loopctl.today_date(),
         "summary": "Demo has one clear user-visible improvement worth doing first.",
@@ -82,7 +82,7 @@ def fake_pm_agent_plan(project="demo", envelope_name="primary-surface"):
                     "name": envelope_name,
                     "scope": "CLI input behavior plus tests.",
                     "allowed_files": ["src/**", "tests/**"],
-                    "verification_commands": ["git diff --check"],
+                    "verification_commands": envelope_commands or ["git diff --check"],
                     "forbidden_changes": ["credentials/secrets/.env", "deployment/publishing"],
                 },
                 "tasks": [
@@ -221,6 +221,34 @@ def test_approve_medium_uses_morning_recommended_envelope(monkeypatch, tmp_path)
     approvals = json.loads((engine / "approvals" / "latest.json").read_text())
     assert approvals["approved"]["demo"]["medium_auto_approved_for_day"] is True
     assert approvals["approved"]["demo"]["medium_envelope"]["source"] == "morning_pm_review"
+
+
+def test_pm_medium_envelope_verification_aligns_to_trusted_commands(monkeypatch, tmp_path):
+    repo = make_repo(tmp_path)
+    engine = patch_engine(monkeypatch, tmp_path, repo)
+    registry = json.loads((engine / "registry.json").read_text())
+    registry["projects"]["demo"]["verification_commands"] = ["python3 -m pytest tests/"]
+    (engine / "registry.json").write_text(json.dumps(registry))
+    patch_pm_agent(
+        monkeypatch,
+        fake_pm_agent_plan(
+            envelope_name="calculator-input",
+            envelope_commands=["git diff --check"],
+        ),
+    )
+
+    result = loopctl.write_morning_review(["demo"])
+
+    row = result["plan"]["projects"][0]
+    envelope = row["medium_envelope"]
+    assert envelope["verification_commands"] == ["python3 -m pytest tests/"]
+    assert envelope["dropped_untrusted_verification_commands"] == ["git diff --check"]
+    assert "dropped_untrusted_verification: git diff --check" in result["markdown"]
+
+    loopctl.approve_command("demo", repo, None, [], [], approve_medium=True)
+    focus_text = (repo / ".loop" / "daily-focus" / "latest.md").read_text()
+    assert "- python3 -m pytest tests/" in focus_text
+    assert "- git diff --check" not in focus_text
 
 
 def test_approve_medium_requires_morning_envelope_or_explicit_envelope(monkeypatch, tmp_path):

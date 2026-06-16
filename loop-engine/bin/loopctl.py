@@ -1185,6 +1185,13 @@ def trusted_verification_commands(issue_path: Path, cfg: dict) -> list[str]:
     return commands
 
 
+def project_trusted_verification_commands(cfg: dict) -> list[str]:
+    commands = [str(cmd).strip() for cmd in cfg.get("verification_commands", []) if str(cmd).strip()]
+    if not commands:
+        commands = detect_verification_commands(Path(cfg["repo_path"]))
+    return commands
+
+
 # Only these issue sections describe the work the task WILL do. Sections like
 # "Out Of Scope" / "Reviewer Checklist" enumerate prohibitions ("no credentials,
 # no launchd, no publishing") and must NOT be screened, or every legitimate
@@ -3315,6 +3322,9 @@ def normalize_medium_envelope(raw: object, cfg: dict, row: dict, has_medium_task
         if isinstance(envelope.get("verification_commands"), list)
         else []
     )
+    trusted_commands = project_trusted_verification_commands(cfg)
+    proposed_commands = [str(item).strip() for item in verification_commands if str(item).strip()]
+    aligned_commands = [command for command in proposed_commands if command in trusted_commands]
     forbidden_changes = (
         envelope.get("forbidden_changes")
         if isinstance(envelope.get("forbidden_changes"), list)
@@ -3324,11 +3334,10 @@ def normalize_medium_envelope(raw: object, cfg: dict, row: dict, has_medium_task
         "name": name or "medium-risk",
         "scope": str(envelope.get("scope") or row.get("top_value_task") or "Approved medium-risk product work for today."),
         "allowed_files": [str(item).strip() for item in allowed_files if str(item).strip()] or default_medium_allowed_files(cfg),
-        "verification_commands": (
-            [str(item).strip() for item in verification_commands if str(item).strip()]
-            or cfg.get("verification_commands")
-            or detect_verification_commands(Path(cfg["repo_path"]))
-        ),
+        "verification_commands": aligned_commands or trusted_commands,
+        "dropped_untrusted_verification_commands": [
+            command for command in proposed_commands if command not in trusted_commands
+        ],
         "forbidden_changes": [str(item).strip() for item in forbidden_changes if str(item).strip()] or [
             "credentials/secrets/.env",
             "launchd/cron/scheduler installation",
@@ -3553,6 +3562,11 @@ def render_morning_review(rows: list[dict], summary: str = "", questions: list[s
             f"  - allowed_files: {display_text(', '.join(envelope.get('allowed_files') or []), max_chars=260)}",
             f"  - verification: {display_text('; '.join(envelope.get('verification_commands') or []), max_chars=260)}",
         ])
+        dropped = envelope.get("dropped_untrusted_verification_commands") or []
+        if dropped:
+            lines.append(
+                f"  - dropped_untrusted_verification: {display_text('; '.join(dropped), max_chars=260)}"
+            )
     lines.extend([
         "",
         "## Ranked Development Tasks",
@@ -3894,7 +3908,7 @@ def approve_command(
         medium_envelope = {
             "name": medium_envelope_name,
             "allowed_files": allowed_files or default_medium_allowed_files(cfg),
-            "verification_commands": verification_commands or cfg.get("verification_commands") or detect_verification_commands(Path(cfg["repo_path"])),
+            "verification_commands": verification_commands or project_trusted_verification_commands(cfg),
             "supervised_first_run": True,
             "scope": "Operator-approved medium-risk work for today.",
         }
@@ -3909,7 +3923,7 @@ def approve_command(
         medium_envelope = {
             "name": recommended["name"],
             "allowed_files": recommended.get("allowed_files") or default_medium_allowed_files(cfg),
-            "verification_commands": recommended.get("verification_commands") or cfg.get("verification_commands") or detect_verification_commands(Path(cfg["repo_path"])),
+            "verification_commands": recommended.get("verification_commands") or project_trusted_verification_commands(cfg),
             "supervised_first_run": True,
             "scope": recommended.get("scope") or "Morning-approved medium-risk work for today.",
             "forbidden_changes": recommended.get("forbidden_changes") or [],

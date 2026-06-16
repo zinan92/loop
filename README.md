@@ -171,6 +171,7 @@ By default **only the top-ranked auto-runnable task executes per cycle** (`max_t
 3. Medium-risk work is approved once in the morning, for the whole day, inside a bounded envelope:
    - recommended: `loop approve <project> --approve-medium`
    - `loop approve <project> --medium-envelope <name> --allowed-file ... --verification-command ...`
+   - PM-recommended verification commands are clipped to the project's trusted `verification_commands`; untrusted suggestions are shown in the morning review but are not written into the approved envelope.
 
 **Day — execute only approved work:**
 1. `loop start-day [project...]` starts approved projects only.
