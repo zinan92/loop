@@ -384,6 +384,24 @@ def test_changed_files_preserves_porcelain_status_columns(monkeypatch, tmp_path)
     ]
 
 
+def test_changed_files_ignores_python_verification_cache(monkeypatch, tmp_path):
+    class Result:
+        stdout = (
+            " M cli.py\n"
+            "?? __pycache__/cli.cpython-311.pyc\n"
+            "?? pkg/__pycache__/mod.cpython-311.pyc\n"
+            "?? .pytest_cache/CACHEDIR.TAG\n"
+            "?? tests/test_cli.py\n"
+        )
+
+    monkeypatch.setattr(loopctl, "run", lambda *args, **kwargs: Result())
+
+    assert loopctl.changed_files(tmp_path) == [
+        "cli.py",
+        "tests/test_cli.py",
+    ]
+
+
 # --- secret laundering scan -------------------------------------------------
 
 def test_secret_marker_blocked(tmp_path):

@@ -518,6 +518,19 @@ def test_bootstrap_rejects_missing_github_remote_without_mutation(monkeypatch, t
     assert json.loads(registry.read_text()) == {"projects": {}}
 
 
+def test_product_runtime_gitignore_adds_daily_focus_once(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / ".gitignore").write_text("dist/\n")
+
+    assert loopctl.ensure_product_runtime_gitignore(repo) is True
+    assert loopctl.ensure_product_runtime_gitignore(repo) is False
+
+    text = (repo / ".gitignore").read_text()
+    assert text.count(".loop/daily-focus/") == 1
+    assert "dist/" in text
+
+
 def test_bootstrap_writes_contract_and_registry(monkeypatch, tmp_path):
     repo = tmp_path / "Demo App"
     _init_repo(repo)
@@ -549,6 +562,7 @@ def test_bootstrap_writes_contract_and_registry(monkeypatch, tmp_path):
     assert "TODO" not in contract_text
     assert "highest-value small product change" in contract_text
     assert "do nothing" in contract_text
+    assert ".loop/daily-focus/" in (repo / ".gitignore").read_text()
     cfg = json.loads(registry.read_text())["projects"]["demo-app"]
     assert cfg["repo_path"] == str(repo)
     assert cfg["github_repo"] == "acme/demo-app"
