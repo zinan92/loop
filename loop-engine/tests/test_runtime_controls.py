@@ -290,7 +290,7 @@ def test_planner_uses_role_agent_provider(monkeypatch, tmp_path):
 
 def test_agent_sandbox_profile_keeps_secret_denies_for_documented_policy():
     profile = loopctl.agent_sandbox_profile()
-    assert ".config/loop/secrets" in profile
+    assert str(loopctl.SECRETS_DIR) in profile
     assert ".ssh" in profile
     assert ".aws" in profile
     assert ".config/gh" in profile
@@ -743,7 +743,7 @@ def test_verification_runner_uses_sandbox_and_strips_env(monkeypatch, tmp_path):
     assert captured["cmd"][:2] == ["/usr/bin/sandbox-exec", "-p"]
     profile = captured["cmd"][2]
     assert "(deny network*)" in profile
-    assert ".config/loop/secrets" in profile
+    assert str(loopctl.SECRETS_DIR) in profile
     assert ".ssh" in profile
     assert ".aws" in profile
     assert ".config/gh" in profile

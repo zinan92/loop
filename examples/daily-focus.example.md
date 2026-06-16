@@ -22,11 +22,21 @@ internal cleanup unless it directly unlocks that improvement.
    - value_score: 3
    - expected_risk: low
 
-## Recommended Budget
+## Loop Control Fields
 
-- recommended_cycles: 1-2
-- stop_condition: Stop after the user-visible improvement lands or after one
-  no-op cycle.
+recommended_cycles: 2
+stop_condition: Stop after the user-visible improvement lands or after one no-op cycle.
+value_threshold: 3
+allow_do_nothing: true
+max_noop_cycles: 1
+preapproved_medium_risk: primary-surface-improvement
+preapproved_medium_risk_supervised_first_run: true
+preapproved_medium_risk_allowed_files:
+- src/**
+- web/**
+- tests/**
+preapproved_medium_risk_verification_commands:
+- git diff --check
 
 ## Preapproved Medium-Risk Envelope
 

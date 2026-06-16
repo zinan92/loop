@@ -5,6 +5,7 @@ import argparse
 import datetime as dt
 import fcntl
 import fnmatch
+import getpass
 import json
 import os
 import re
@@ -75,6 +76,8 @@ LEARNING_EVENT_MAX_BYTES = 1024 * 1024
 LEARNING_EVENT_ROTATIONS = 3
 DEFAULT_VALUE_THRESHOLD = 3
 DEFAULT_MAX_NOOP_CYCLES = 2
+CONFIG_DIR = Path(os.environ.get("LOOP_CONFIG_DIR", str(Path.home() / ".config" / "loop"))).expanduser()
+CONFIG_PATH = CONFIG_DIR / "config.json"
 
 
 class LoopBlocked(RuntimeError):
@@ -89,7 +92,19 @@ def load_json(path: Path) -> dict:
 
 
 def write_json(path: Path, data: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+
+
+def load_config() -> dict:
+    if not CONFIG_PATH.exists():
+        return {"version": 1}
+    return load_json(CONFIG_PATH)
+
+
+def save_config(data: dict) -> None:
+    data.setdefault("version", 1)
+    write_json(CONFIG_PATH, data)
 
 
 def now_iso() -> str:
@@ -3005,6 +3020,643 @@ def print_status(project: str, as_json: bool) -> None:
     print(f"SCHEDULER installed={scheduler.get('installed')} loaded={scheduler.get('loaded')} label={scheduler.get('label')}")
 
 
+def today_date() -> str:
+    return dt.date.today().isoformat()
+
+
+def dated_latest_paths(root_name: str, suffix: str = ".md") -> dict[str, Path]:
+    root = ENGINE_ROOT / root_name
+    date = today_date()
+    return {"dir": root, "dated": root / f"{date}{suffix}", "latest": root / f"latest{suffix}"}
+
+
+def approvals_paths() -> dict[str, Path]:
+    root = ENGINE_ROOT / "approvals"
+    date = today_date()
+    return {
+        "dir": root,
+        "dated_json": root / f"{date}.json",
+        "latest_json": root / "latest.json",
+        "dated_md": root / f"{date}.md",
+        "latest_md": root / "latest.md",
+    }
+
+
+def registered_project_ids(projects: list[str] | None = None) -> list[str]:
+    registry = registry_data()
+    available = sorted(registry.get("projects", {}).keys())
+    if not projects:
+        return available
+    result = []
+    for project in projects:
+        registry_project(project)
+        result.append(project)
+    return result
+
+
+def today_project_runs(project: str) -> list[dict]:
+    return [hydrated_run_entry(run) for run in today_run_entries(project)]
+
+
+def risk_for_waiting_reason(reason: str) -> str:
+    if reason in {"high_risk_requires_approval", "blocked_category", "untrusted_verification"}:
+        return "high"
+    if reason.startswith("medium_"):
+        return "medium"
+    return "low"
+
+
+def approval_path_for_risk(risk: str) -> str:
+    if risk == "low":
+        return "auto after value and verification gates"
+    if risk == "medium":
+        return "requires morning preapproved envelope and first supervised execution"
+    return "manual approval only; never auto-executed"
+
+
+def default_medium_allowed_files(cfg: dict) -> list[str]:
+    repo = Path(cfg.get("repo_path", ""))
+    candidates = []
+    for name in ("src", "app", "web", "lib", "tests"):
+        if repo and (repo / name).exists():
+            candidates.append(f"{name}/**")
+    if (repo / "README.md").exists():
+        candidates.append("README.md")
+    return candidates or ["src/**", "tests/**", "README.md"]
+
+
+def proposed_tasks_for_project(project: str, cfg: dict, payload: dict) -> list[dict]:
+    waiting = payload.get("waiting_for_human") or []
+    tasks: list[dict] = []
+    if waiting:
+        top = waiting[0]
+        reason = str(top.get("reason") or "waiting_for_human")
+        risk = risk_for_waiting_reason(reason)
+        tasks.append({
+            "rank": 1,
+            "task": f"Resolve waiting gate: {reason}",
+            "value_score": 5,
+            "risk": risk,
+            "approval_path": approval_path_for_risk(risk),
+            "benefit": "Unblocks the highest-value queued work instead of letting lower-value work run around it.",
+        })
+    tasks.extend([
+        {
+            "rank": len(tasks) + 1,
+            "task": "Improve the primary user-facing artifact or workflow so the before/after benefit is visible.",
+            "value_score": 5 if not waiting else 4,
+            "risk": "medium",
+            "approval_path": approval_path_for_risk("medium"),
+            "benefit": "Moves the product in the surface the user actually experiences, not only internal plumbing.",
+        },
+        {
+            "rank": len(tasks) + 2,
+            "task": "Improve operator digest/status clarity for what changed, what merged, and what needs approval.",
+            "value_score": 4,
+            "risk": "low",
+            "approval_path": approval_path_for_risk("low"),
+            "benefit": "Reduces time spent reading logs and makes every loop cycle easier to judge.",
+        },
+        {
+            "rank": len(tasks) + 3,
+            "task": "Add focused tests around today's selected behavior or gate.",
+            "value_score": 3,
+            "risk": "low",
+            "approval_path": approval_path_for_risk("low"),
+            "benefit": "Keeps the loop from regressing the behavior it just improved.",
+        },
+    ])
+    return sorted(tasks, key=lambda item: int(item["value_score"]), reverse=True)
+
+
+def project_pm_row(project: str) -> dict:
+    cfg = registry_project(project)
+    payload = status_payload(project)
+    tasks = proposed_tasks_for_project(project, cfg, payload)
+    top = tasks[0]
+    recent_runs = today_project_runs(project)
+    recommended_cycles = 1 if top["risk"] == "high" else 2
+    decision = "plan-only"
+    return {
+        "project": project,
+        "name": cfg.get("name") or project,
+        "decision": decision,
+        "today_focus": top["task"],
+        "top_value_task": top["task"],
+        "top_risk": top["risk"],
+        "approval_needed": top["approval_path"],
+        "user_benefit": top["benefit"],
+        "success_criteria": "A normal operator can see the product-level before/after without reading raw logs.",
+        "reason": f"status={payload.get('status') or '-'} waiting={len(payload.get('waiting_for_human') or [])} runs_today={len(recent_runs)}",
+        "recommended_cycles": recommended_cycles,
+        "stop_condition": "Stop when the selected user-visible benefit is shipped, or when no candidate clears the value line.",
+        "value_threshold": 3,
+        "tasks": tasks,
+    }
+
+
+def render_morning_review(rows: list[dict]) -> str:
+    date = today_date()
+    lines = [
+        f"# Daily PM Review - {date}",
+        "",
+        "## Portfolio Board",
+        "",
+        "| Project | Decision | Today Focus | Top Value Task | Top Risk | Approval Needed | User Benefit | Success Criteria | Reason |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+    ]
+    for row in rows:
+        lines.append(
+            "| "
+            + " | ".join(
+                display_text(row[key], max_chars=160)
+                for key in (
+                    "project",
+                    "decision",
+                    "today_focus",
+                    "top_value_task",
+                    "top_risk",
+                    "approval_needed",
+                    "user_benefit",
+                    "success_criteria",
+                    "reason",
+                )
+            )
+            + " |"
+        )
+    lines.extend([
+        "",
+        "## Ranked Development Tasks",
+        "",
+        "| Project | Rank | Task | Value Score | Risk | Approval Path | Benefit |",
+        "| --- | ---: | --- | ---: | --- | --- | --- |",
+    ])
+    for row in rows:
+        for task in row["tasks"]:
+            lines.append(
+                f"| {display_text(row['project'])} | {task['rank']} | "
+                f"{display_text(task['task'], max_chars=180)} | {task['value_score']} | "
+                f"{display_text(task['risk'])} | {display_text(task['approval_path'], max_chars=120)} | "
+                f"{display_text(task['benefit'], max_chars=180)} |"
+            )
+    lines.extend([
+        "",
+        "## Recommended Loop Budgets",
+        "",
+        "| Project | Recommended Cycles | Stop Condition | Value Threshold |",
+        "| --- | ---: | --- | ---: |",
+    ])
+    for row in rows:
+        lines.append(
+            f"| {display_text(row['project'])} | {row['recommended_cycles']} | "
+            f"{display_text(row['stop_condition'], max_chars=220)} | {row['value_threshold']} |"
+        )
+    lines.extend([
+        "",
+        "## Approved Loop Starts",
+        "",
+        "- None yet. Use `loop approve <project>` after choosing today's work.",
+        "",
+        "## Plan Only / Held",
+        "",
+    ])
+    for row in rows:
+        lines.append(f"- `{display_text(row['project'])}`: awaiting explicit approval.")
+    lines.extend([
+        "",
+        "## Questions for Operator",
+        "",
+        "- Which projects should run today?",
+        "- For each medium-risk top item, approve a narrow envelope with allowed files and verification commands before `loop start-day`.",
+        "",
+        "## Tomorrow Carry-Forward",
+        "",
+        "- Re-read today's evening scorecard before ranking tomorrow's portfolio.",
+    ])
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def write_morning_review(projects: list[str] | None = None) -> dict:
+    rows = [project_pm_row(project) for project in registered_project_ids(projects)]
+    rows.sort(key=lambda row: int(row["tasks"][0]["value_score"]), reverse=True)
+    paths = dated_latest_paths("pm-reviews")
+    text = render_morning_review(rows)
+    paths["dir"].mkdir(parents=True, exist_ok=True)
+    paths["dated"].write_text(text)
+    paths["latest"].write_text(text)
+    return {"rows": rows, "paths": paths, "markdown": text}
+
+
+def load_latest_approvals() -> dict:
+    paths = approvals_paths()
+    if not paths["latest_json"].exists():
+        return {"date": today_date(), "approved": {}, "rejected": {}}
+    data = load_json(paths["latest_json"])
+    if data.get("date") != today_date():
+        return {"date": today_date(), "approved": {}, "rejected": {}}
+    data.setdefault("approved", {})
+    data.setdefault("rejected", {})
+    return data
+
+
+def write_approvals(data: dict) -> None:
+    data["date"] = today_date()
+    paths = approvals_paths()
+    paths["dir"].mkdir(parents=True, exist_ok=True)
+    write_json(paths["dated_json"], data)
+    write_json(paths["latest_json"], data)
+    lines = [
+        f"# Loop Approvals - {data['date']}",
+        "",
+        "## Approved",
+        "",
+    ]
+    if not data.get("approved"):
+        lines.append("- None")
+    for project, approval in sorted((data.get("approved") or {}).items()):
+        medium = approval.get("medium_envelope") or {}
+        lines.append(
+            f"- `{display_text(project)}` approved_at={display_text(approval.get('approved_at'))} "
+            f"medium_envelope={display_text(medium.get('name') or '-')}"
+        )
+    lines.extend(["", "## Rejected", ""])
+    if not data.get("rejected"):
+        lines.append("- None")
+    for project, rejection in sorted((data.get("rejected") or {}).items()):
+        lines.append(f"- `{display_text(project)}` {display_text(rejection.get('reason') or 'rejected')}")
+    text = "\n".join(lines).rstrip() + "\n"
+    paths["dated_md"].write_text(text)
+    paths["latest_md"].write_text(text)
+
+
+def render_daily_focus(
+    project: str,
+    cfg: dict,
+    medium_envelope: dict | None,
+    row: dict | None = None,
+) -> str:
+    row = row or project_pm_row(project)
+    verification_commands = cfg.get("verification_commands") or detect_verification_commands(Path(cfg["repo_path"]))
+    lines = [
+        f"# Daily Focus: {cfg.get('name') or project}",
+        "",
+        f"Date: {today_date()}",
+        "",
+        "## Today Direction",
+        "",
+        row["today_focus"],
+        "",
+        "## Loop Control Fields",
+        "",
+        f"recommended_cycles: {row.get('recommended_cycles') or 1}",
+        f"stop_condition: {row.get('stop_condition')}",
+        "value_threshold: 3",
+        "allow_do_nothing: true",
+        "max_noop_cycles: 1",
+    ]
+    if medium_envelope:
+        lines.extend([
+            f"preapproved_medium_risk: {medium_envelope['name']}",
+            "preapproved_medium_risk_supervised_first_run: true",
+            "preapproved_medium_risk_allowed_files:",
+        ])
+        lines.extend(f"- {item}" for item in medium_envelope.get("allowed_files") or default_medium_allowed_files(cfg))
+        lines.append("preapproved_medium_risk_verification_commands:")
+        lines.extend(f"- {item}" for item in medium_envelope.get("verification_commands") or verification_commands)
+    lines.extend([
+        "",
+        "## Value-Ranked Work",
+        "",
+    ])
+    for task in row["tasks"]:
+        lines.extend([
+            f"{task['rank']}. {task['task']}",
+            f"   - value_score: {task['value_score']}",
+            f"   - expected_risk: {task['risk']}",
+            f"   - approval: {task['approval_path']}",
+            f"   - benefit: {task['benefit']}",
+        ])
+    lines.extend([
+        "",
+        "## Success Criteria",
+        "",
+        f"- {row.get('success_criteria')}",
+    ])
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def write_daily_focus(project: str, cfg: dict, medium_envelope: dict | None = None) -> dict[str, Path]:
+    row = project_pm_row(project)
+    focus_dir = Path(cfg["repo_path"]) / ".loop" / "daily-focus"
+    focus_dir.mkdir(parents=True, exist_ok=True)
+    dated = focus_dir / f"{today_date()}.md"
+    latest = focus_dir / "latest.md"
+    text = render_daily_focus(project, cfg, medium_envelope, row=row)
+    dated.write_text(text)
+    latest.write_text(text)
+    return {"dated": dated, "latest": latest}
+
+
+def send_notification(event: str, title: str, body: str, project: str | None = None) -> bool:
+    config = load_config()
+    notify_cfg = config.get("notifications") or {}
+    mode = str(os.environ.get("LOOP_NOTIFY_MODE") or notify_cfg.get("mode") or "none").lower()
+    log_dir = ENGINE_ROOT / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_event = {
+        "event": event,
+        "project": project,
+        "title": title,
+        "body": body,
+        "mode": mode,
+        "created_at": now_iso(),
+    }
+    with (log_dir / "notifications.jsonl").open("a") as handle:
+        handle.write(json.dumps(log_event, ensure_ascii=False, sort_keys=True) + "\n")
+    if mode in {"", "none", "off", "disabled"}:
+        return False
+    if mode == "macos":
+        script = (
+            'display notification '
+            + json.dumps(body[:240])
+            + ' with title '
+            + json.dumps(title[:80])
+        )
+        return subprocess.run(["osascript", "-e", script], text=True, capture_output=True).returncode == 0
+    if mode == "webhook":
+        url = os.environ.get("LOOP_NOTIFY_WEBHOOK_URL") or notify_cfg.get("webhook_url")
+        url_file = os.environ.get("LOOP_NOTIFY_WEBHOOK_URL_FILE") or notify_cfg.get("webhook_url_file")
+        if not url and url_file and Path(url_file).expanduser().exists():
+            url = Path(url_file).expanduser().read_text().strip()
+        if not url:
+            return False
+        payload = json.dumps(log_event).encode()
+        request = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(request, timeout=10):
+                return True
+        except Exception:
+            return False
+    return False
+
+
+def setup_command(
+    yes: bool,
+    provider: str | None,
+    linear_api_key_file: str | None,
+    notify_mode: str | None,
+    webhook_url_file: str | None,
+) -> None:
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    config = load_config()
+    checks = {
+        "git": bool(shutil.which("git")),
+        "gh_cli": bool(shutil.which("gh")),
+        "gh_authenticated": gh_auth_ok(),
+        "sandbox_exec": bool(shutil.which("sandbox-exec")),
+        "codex_cli": bool(shutil.which("codex")),
+        "claude_cli": bool(shutil.which("claude")),
+    }
+    selected_provider = provider or config.get("default_provider")
+    if not selected_provider:
+        selected_provider = "codex" if checks["codex_cli"] else "claude" if checks["claude_cli"] else "codex"
+    config["default_provider"] = selected_provider
+    if linear_api_key_file:
+        config.setdefault("linear", {})["api_key_file"] = str(Path(linear_api_key_file).expanduser())
+    elif os.environ.get("LINEAR_API_KEY"):
+        config.setdefault("linear", {})["source"] = "env"
+    elif sys.stdin.isatty() and not yes:
+        answer = input("Enable Linear sync now? [y/N] ").strip().lower()
+        if answer in {"y", "yes"}:
+            key = getpass.getpass("Linear API key (input hidden): ").strip()
+            if key:
+                DEFAULT_LINEAR_API_KEY_FILE.parent.mkdir(parents=True, exist_ok=True)
+                DEFAULT_LINEAR_API_KEY_FILE.write_text(key + "\n")
+                DEFAULT_LINEAR_API_KEY_FILE.chmod(0o600)
+                config.setdefault("linear", {})["api_key_file"] = str(DEFAULT_LINEAR_API_KEY_FILE)
+    else:
+        config.setdefault("linear", {}).setdefault("enabled", False)
+    if notify_mode:
+        config.setdefault("notifications", {})["mode"] = notify_mode
+    if webhook_url_file:
+        config.setdefault("notifications", {})["webhook_url_file"] = str(Path(webhook_url_file).expanduser())
+    save_config(config)
+    for name, passed in checks.items():
+        print(f"SETUP_CHECK {name}={'PASS' if passed else 'FAIL'}")
+    if not checks["gh_authenticated"]:
+        print("SETUP_ACTION run: gh auth login")
+        if sys.stdin.isatty() and not yes and checks["gh_cli"]:
+            answer = input("Run `gh auth login` now? [y/N] ").strip().lower()
+            if answer in {"y", "yes"}:
+                subprocess.run(["gh", "auth", "login"])
+    print(f"SETUP_CONFIG {CONFIG_PATH}")
+    print(f"SETUP_PROVIDER {selected_provider}")
+    print("SETUP_COMPLETE")
+
+
+def morning_command(projects: list[str] | None, start_after: bool = False) -> None:
+    result = write_morning_review(projects)
+    print(f"MORNING_REVIEW {result['paths']['dated']}")
+    print(f"MORNING_REVIEW_LATEST {result['paths']['latest']}")
+    for row in result["rows"]:
+        print(
+            f"MORNING_PROJECT {row['project']} value={row['tasks'][0]['value_score']} "
+            f"risk={row['top_risk']} decision={row['decision']}"
+        )
+    if start_after:
+        start_day_command([row["project"] for row in result["rows"]])
+
+
+def approve_command(
+    project: str | None,
+    cwd: Path,
+    medium_envelope_name: str | None,
+    allowed_files: list[str],
+    verification_commands: list[str],
+    start_after: bool = False,
+) -> None:
+    resolved = resolve_project(cwd, project=project, bootstrap=False)
+    cfg = registry_project(resolved)
+    medium_envelope = None
+    if medium_envelope_name:
+        medium_envelope = {
+            "name": medium_envelope_name,
+            "allowed_files": allowed_files or default_medium_allowed_files(cfg),
+            "verification_commands": verification_commands or cfg.get("verification_commands") or detect_verification_commands(Path(cfg["repo_path"])),
+            "supervised_first_run": True,
+        }
+    focus_paths = write_daily_focus(resolved, cfg, medium_envelope=medium_envelope)
+    approvals = load_latest_approvals()
+    approvals.setdefault("approved", {})[resolved] = {
+        "approved_at": now_iso(),
+        "project": resolved,
+        "daily_focus": {key: str(value) for key, value in focus_paths.items()},
+        "medium_envelope": medium_envelope,
+    }
+    approvals.setdefault("rejected", {}).pop(resolved, None)
+    write_approvals(approvals)
+    print(f"LOOP_APPROVED project={resolved} daily_focus={focus_paths['latest']}")
+    if medium_envelope:
+        print(f"MEDIUM_ENVELOPE {medium_envelope['name']} supervised_first_run=true")
+    if start_after:
+        start_day_command([resolved])
+
+
+def reject_command(project: str | None, cwd: Path, reason: str | None = None) -> None:
+    resolved = resolve_project(cwd, project=project, bootstrap=False)
+    approvals = load_latest_approvals()
+    approvals.setdefault("approved", {}).pop(resolved, None)
+    approvals.setdefault("rejected", {})[resolved] = {
+        "rejected_at": now_iso(),
+        "reason": reason or "rejected_by_operator",
+    }
+    write_approvals(approvals)
+    print(f"LOOP_REJECTED project={resolved}")
+
+
+def activate_without_immediate_tick(project: str) -> None:
+    load_scheduler(project)
+    start_loop(project)
+    schedule_next_cycle(project)
+
+
+def start_day_command(projects: list[str] | None) -> None:
+    approvals = load_latest_approvals()
+    approved = approvals.get("approved") or {}
+    selected = projects or sorted(approved.keys())
+    if not selected:
+        raise LoopBlocked("no_daily_approvals", "No approved projects found for today. Run loop morning, then loop approve <project>.")
+    for project in selected:
+        if project not in approved:
+            raise LoopBlocked("not_approved_today", f"Project {project!r} is not approved for today's loop start.")
+        registry_project(project)
+        medium = approved[project].get("medium_envelope")
+        if medium and not approved[project].get("medium_first_supervised_at"):
+            result = cycle(project, supervised=True)
+            approved[project]["medium_first_supervised_at"] = now_iso()
+            approved[project]["medium_first_supervised_run_id"] = result.get("run_id")
+            write_approvals(approvals)
+            if result.get("waiting_for_human"):
+                send_notification(
+                    "needs_human",
+                    f"Loop needs approval: {project}",
+                    f"Supervised medium-risk run ended {result.get('status')}; check loop digest.",
+                    project,
+                )
+                print(f"START_DAY_WAITING project={project} run_id={result.get('run_id')}")
+                continue
+            activate_without_immediate_tick(project)
+            print(f"START_DAY_ACTIVE project={project} next_cycle=hourly")
+            continue
+        start_command(project, ENGINE_ROOT)
+        send_notification("loop_started", f"Loop started: {project}", "The approved daily loop is now running hourly.", project)
+
+
+def score_for_project(project: str, payload: dict) -> tuple[str, str, str]:
+    runs = today_project_runs(project)
+    waiting = payload.get("approval_queue") or []
+    if waiting:
+        return "blocked", f"{len(waiting)} item(s) waiting for approval", "Resolve or reject the waiting item before more autonomous work."
+    if not runs:
+        return "not-run", "No loop run recorded today", "Carry forward if the project is still high-value tomorrow."
+    merged = sum(1 for run in runs for task in run.get("tasks", []) if task.get("status") == "merged")
+    if merged:
+        return "met", f"{merged} merged task(s) today", "Review product impact and decide whether to continue tomorrow."
+    if any(run.get("status") == "no_op" for run in runs):
+        return "partial", "Loop ran but chose no-op or hit the value line", "Either accept the stop or refine tomorrow's daily focus."
+    return "partial", f"{len(runs)} run(s) completed without merged work", "Inspect digest for the remaining bottleneck."
+
+
+def write_evening_scorecard(projects: list[str] | None = None) -> dict:
+    selected = registered_project_ids(projects) if projects else sorted((load_latest_approvals().get("approved") or {}).keys())
+    if not selected:
+        selected = registered_project_ids([])
+    paths = dated_latest_paths("evening-scorecards")
+    report_dir = ENGINE_ROOT / "reports" / "daily"
+    report_dir.mkdir(parents=True, exist_ok=True)
+    lines = [
+        f"# Evening Scorecard - {today_date()}",
+        "",
+        "## Summary",
+        "",
+        "- Overall: daily loop recap generated from project digests and approval queues.",
+        "- Carry into tomorrow: rank any blocked high-value items before starting new work.",
+        "",
+        "## Project Scores",
+        "",
+        "| Project | Morning Decision | Score | Evidence | Miss / Lesson | Tomorrow Implication |",
+        "| --- | --- | --- | --- | --- | --- |",
+    ]
+    for project in selected:
+        payload = digest_payload(project)
+        write_digest_report(project, payload)
+        status, evidence, tomorrow = score_for_project(project, payload)
+        lines.append(
+            f"| {display_text(project)} | approved-or-reviewed | {status} | "
+            f"{display_text(evidence, max_chars=180)} | {display_text(payload.get('last_run_id') or '-', max_chars=120)} | "
+            f"{display_text(tomorrow, max_chars=180)} |"
+        )
+    lines.extend(["", "## Waiting for Operator", ""])
+    waiting_count = 0
+    for project in selected:
+        queue = digest_payload(project).get("approval_queue") or []
+        for item in queue:
+            waiting_count += 1
+            lines.append(f"- `{display_text(project)}` `{display_text(item.get('reason'))}` {display_text(item.get('approval_hint') or item.get('error'))}")
+    if waiting_count == 0:
+        lines.append("- None")
+    text = "\n".join(lines).rstrip() + "\n"
+    paths["dir"].mkdir(parents=True, exist_ok=True)
+    paths["dated"].write_text(text)
+    paths["latest"].write_text(text)
+    daily_md = report_dir / f"{today_date()}.md"
+    daily_html = report_dir / f"{today_date()}.html"
+    daily_md.write_text(text)
+    daily_html.write_text(render_digest_html({"project": f"daily-{today_date()}"}, text))
+    return {"paths": paths, "daily_md": daily_md, "daily_html": daily_html, "projects": selected}
+
+
+def evening_command(projects: list[str] | None) -> None:
+    selected = projects or sorted((load_latest_approvals().get("approved") or {}).keys())
+    for project in selected:
+        try:
+            if control_state(project) == "active":
+                pause_loop(project)
+        except Exception:
+            pass
+    result = write_evening_scorecard(selected)
+    send_notification(
+        "evening_recap",
+        "Loop evening recap ready",
+        f"Evening scorecard written for {len(result['projects'])} project(s).",
+    )
+    print(f"EVENING_SCORECARD {result['paths']['dated']}")
+    print(f"EVENING_SCORECARD_LATEST {result['paths']['latest']}")
+    print(f"DAILY_REPORT {result['daily_md']} {result['daily_html']}")
+
+
+def notify_command(action: str, mode: str | None = None, webhook_url_file: str | None = None) -> None:
+    config = load_config()
+    if action == "setup":
+        notify_cfg = config.setdefault("notifications", {})
+        if mode:
+            notify_cfg["mode"] = mode
+        if webhook_url_file:
+            notify_cfg["webhook_url_file"] = str(Path(webhook_url_file).expanduser())
+        notify_cfg.setdefault("mode", "macos")
+        save_config(config)
+        print(f"NOTIFY_CONFIG {CONFIG_PATH} mode={notify_cfg.get('mode')}")
+        return
+    if action == "status":
+        print(json.dumps(config.get("notifications") or {"mode": "none"}, indent=2))
+        return
+    if action == "test":
+        ok = send_notification("test", "Loop notification test", "Notifications are wired.", None)
+        print(f"NOTIFY_TEST {'sent' if ok else 'not_sent'}")
+        return
+    raise RuntimeError(f"unknown notify action: {action}")
+
+
 def doctor_command(project: str | None, cwd: Path) -> None:
     checks: list[tuple[str, bool]] = []
     checks.append(("git", bool(shutil.which("git"))))
@@ -3225,6 +3877,20 @@ def finish_controlled_cycle(
         f"RUN_COMPLETE {run_id} {status} "
         f"tasks={len(task_results)} waiting_for_human={len(waiting_for_human)}"
     )
+    if waiting_for_human:
+        send_notification(
+            "needs_human",
+            f"Loop needs approval: {project}",
+            f"{run_id} ended {status} with {len(waiting_for_human)} waiting item(s).",
+            project,
+        )
+    elif any(task.get("status") == "merged" for task in task_results):
+        send_notification(
+            "merged",
+            f"Loop merged work: {project}",
+            f"{run_id} merged {sum(1 for task in task_results if task.get('status') == 'merged')} task(s).",
+            project,
+        )
     return {
         "run_id": run_id,
         "status": status,
@@ -3817,11 +4483,39 @@ def linear_check(project: str, write_comment: bool) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="command", required=True)
+    setup_parser = sub.add_parser("setup")
+    setup_parser.add_argument("--yes", action="store_true")
+    setup_parser.add_argument("--provider", choices=["codex", "claude"])
+    setup_parser.add_argument("--linear-api-key-file")
+    setup_parser.add_argument("--notify-mode", choices=["none", "macos", "webhook"])
+    setup_parser.add_argument("--webhook-url-file")
     init_parser = sub.add_parser("init")
     init_parser.add_argument("--project")
     init_parser.add_argument("--provider", choices=["codex", "claude"])
     doctor_parser = sub.add_parser("doctor")
     doctor_parser.add_argument("--project")
+    morning_parser = sub.add_parser("morning")
+    morning_parser.add_argument("--project", action="append")
+    morning_parser.add_argument("--start", action="store_true")
+    approve_parser = sub.add_parser("approve")
+    approve_parser.add_argument("--project")
+    approve_parser.add_argument("--medium-envelope")
+    approve_parser.add_argument("--allowed-file", action="append", default=[])
+    approve_parser.add_argument("--verification-command", action="append", default=[])
+    approve_parser.add_argument("--start", action="store_true")
+    reject_parser = sub.add_parser("reject")
+    reject_parser.add_argument("--project")
+    start_day_parser = sub.add_parser("start-day")
+    start_day_parser.add_argument("--project", action="append")
+    evening_parser = sub.add_parser("evening")
+    evening_parser.add_argument("--project", action="append")
+    notify_parser = sub.add_parser("notify")
+    notify_sub = notify_parser.add_subparsers(dest="notify_command", required=True)
+    notify_setup = notify_sub.add_parser("setup")
+    notify_setup.add_argument("--notify-mode", choices=["none", "macos", "webhook"])
+    notify_setup.add_argument("--webhook-url-file")
+    notify_sub.add_parser("test")
+    notify_sub.add_parser("status")
     start_parser = sub.add_parser("start")
     start_parser.add_argument("--project")
     status_parser = sub.add_parser("status")
@@ -3867,10 +4561,41 @@ def main() -> int:
     args = parser.parse_args()
     try:
         cwd = Path.cwd()
-        if args.command == "init":
+        if args.command == "setup":
+            setup_command(
+                args.yes,
+                args.provider,
+                args.linear_api_key_file,
+                args.notify_mode,
+                args.webhook_url_file,
+            )
+        elif args.command == "init":
             init_command(args.project, cwd, provider=args.provider)
         elif args.command == "doctor":
             doctor_command(args.project, cwd)
+        elif args.command == "morning":
+            morning_command(args.project, start_after=args.start)
+        elif args.command == "approve":
+            approve_command(
+                args.project,
+                cwd,
+                args.medium_envelope,
+                args.allowed_file,
+                args.verification_command,
+                start_after=args.start,
+            )
+        elif args.command == "reject":
+            reject_command(args.project, cwd)
+        elif args.command == "start-day":
+            start_day_command(args.project)
+        elif args.command == "evening":
+            evening_command(args.project)
+        elif args.command == "notify":
+            notify_command(
+                args.notify_command,
+                mode=getattr(args, "notify_mode", None),
+                webhook_url_file=getattr(args, "webhook_url_file", None),
+            )
         elif args.command == "start":
             start_command(args.project, cwd)
         elif args.command == "status":

@@ -14,6 +14,7 @@ loop-engine/reports/
 loop-engine/registry.json
 loop-engine/state.json
 loop-engine/pm-reviews/
+loop-engine/approvals/
 loop-engine/human-feedback/
 loop-engine/evening-scorecards/*
 !loop-engine/evening-scorecards/.gitkeep

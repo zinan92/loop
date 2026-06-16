@@ -13,7 +13,14 @@ LOOPCTL = HERE / "loopctl.py"
 def usage(code: int = 2) -> int:
     print(
         "Usage:\n"
-        "  /loop init [project]\n"
+        "  /loop init [project] [--provider codex|claude]\n"
+        "  /loop setup [--yes] [--provider codex|claude]\n"
+        "  /loop doctor [project]\n"
+        "  /loop morning [project...]\n"
+        "  /loop approve [project] [--medium-envelope NAME]\n"
+        "  /loop reject [project]\n"
+        "  /loop start-day [project...]\n"
+        "  /loop evening [project...]\n"
         "  /loop start [project]\n"
         "  /loop status [project] [--json]\n"
         "  /loop digest [project] [--json]\n"
@@ -21,6 +28,7 @@ def usage(code: int = 2) -> int:
         "  /loop resume [project]\n"
         "  /loop stop [project]\n"
         "  /loop run-now [project] [--supervised]\n"
+        "  /loop notify setup|test|status\n"
         "  /loop scheduler install [project]\n"
         "  /loop scheduler load [project]\n"
         "  /loop scheduler status [project]\n"
@@ -37,8 +45,21 @@ def optional_project_arg(args: list[str]) -> tuple[str | None, list[str]]:
     index = 0
     while index < len(args):
         arg = args[index]
-        if arg in {"--json", "--supervised"}:
+        if arg in {"--json", "--supervised", "--yes", "--start", "--medium"}:
             passthrough.append(arg)
+        elif arg in {
+            "--provider",
+            "--medium-envelope",
+            "--allowed-file",
+            "--verification-command",
+            "--notify-mode",
+            "--webhook-url-file",
+            "--linear-api-key-file",
+        }:
+            if index + 1 >= len(args):
+                raise SystemExit(usage())
+            passthrough.extend([arg, args[index + 1]])
+            index += 1
         elif arg == "--project":
             if index + 1 >= len(args):
                 raise SystemExit(usage())
@@ -63,11 +84,36 @@ def main() -> int:
     rest = args[1:]
     loopctl_args: list[str]
 
-    if command in {"init", "start", "status", "digest", "pause", "resume", "stop", "run-now"}:
+    if command in {
+        "init",
+        "setup",
+        "doctor",
+        "start",
+        "status",
+        "digest",
+        "pause",
+        "resume",
+        "stop",
+        "run-now",
+        "approve",
+        "reject",
+    }:
         project, passthrough = optional_project_arg(rest)
         loopctl_args = [command] + passthrough
         if project:
             loopctl_args += ["--project", project]
+    elif command in {"morning", "start-day", "evening"}:
+        loopctl_args = [command]
+        for arg in rest:
+            if arg == "--start":
+                loopctl_args.append(arg)
+            else:
+                loopctl_args += ["--project", arg]
+    elif command == "notify":
+        if not rest or rest[0] not in {"setup", "test", "status"}:
+            return usage()
+        loopctl_args = ["notify", rest[0]]
+        loopctl_args.extend(rest[1:])
     elif command == "scheduler":
         if not rest or rest[0] not in {"install", "load", "status", "uninstall"}:
             return usage()

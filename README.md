@@ -19,8 +19,8 @@
 ---
 
 ```
-in   clean local Git repo + GitHub origin + .loop/contract.yaml + (optional) daily-focus
-out  GitHub issues/PRs + run logs + human digest + bounded memory + (optional) Linear milestones
+in   clean local Git repo + GitHub origin + .loop/contract.yaml + daily PM focus
+out  GitHub issues/PRs + run logs + human digest + evening scorecard + bounded memory + (optional) Linear milestones/notifications
 
 fail  not initialized / no gh auth / no GitHub remote  → LOOP_BLOCKED, no mutation
 fail  no candidate clears the value line               → no-op cycle, no worker runs
@@ -101,23 +101,30 @@ mkdir -p ~/.local/bin
 ln -sf "$(pwd)/loop-engine/bin/loop" ~/.local/bin/loop
 export PATH="$HOME/.local/bin:$PATH"   # add to ~/.zshrc to persist
 
-# 3) Pre-flight (all must pass before init)
-loop doctor   # checks gh / sandbox-exec / the agent CLI your registry needs (re-run after init)
+# 3) First-run setup + pre-flight
+loop setup --yes                  # writes ~/.config/loop/config.json and prints missing actions
+loop doctor                       # checks gh / sandbox-exec / the agent CLI your registry needs
 
 # 4) Initialize a target product repo (run from INSIDE it)
 cd /path/to/your-product-repo        # must be a clean git repo with a GitHub origin
-loop init                            # creates .loop/contract.yaml, a baseline tag,
+loop init --provider codex           # or: --provider claude
+                                     # creates .loop/contract.yaml, a baseline tag,
                                      # a loop/<project>-pilot branch, and registry/state
 loop status
 
-# 5) (optional but recommended) write a daily focus — see examples/daily-focus.example.md
-#    <product-repo>/.loop/daily-focus/latest.md
+# 5) Morning PM review across registered projects
+loop morning                         # writes pm-reviews/YYYY-MM-DD.md + latest.md
+loop approve <project>               # writes <repo>/.loop/daily-focus/latest.md
+# For medium-risk work:
+loop approve <project> --medium-envelope primary-surface \
+  --allowed-file 'src/**' --allowed-file 'tests/**' \
+  --verification-command 'git diff --check'
 
-# 6) Run a single cycle now
-loop run-now
-# → RUN_COMPLETE <project>-<stamp> merged tasks=1 waiting_for_human=0
-#   or, when nothing clears the value line:
-# → RUN_COMPLETE <project>-<stamp> no_op tasks=0 waiting_for_human=0
+# 6) Start the approved day loop
+loop start-day                       # first cycle now, then hourly until stop/pause/budget
+
+# 7) Evening recap
+loop evening                         # pauses active approved projects, writes scorecards + daily report
 ```
 
 To run continuously: `loop start` (hourly, immediate first cycle) → `loop status` / `loop digest` → `loop pause` / `loop stop`.
@@ -147,17 +154,32 @@ By default **only the top-ranked auto-runnable task executes per cycle** (`max_t
 
 ## Daily rhythm: morning & evening / 每日节奏
 
-> loop 不自动生成晨报/晚报——它**读你写的 Markdown**。这两个仪式就是写两个文件 + 跑两条命令。
-> `loop` does not generate these for you; it **reads Markdown you write**. Each ritual = one file + one command.
+`loop` now owns the full daily routine: **morning review → approvals → day loop → evening recap**. The loop still keeps the human in charge of direction: morning review proposes and ranks work; only `loop approve` turns it into execution input.
 
-**🌅 Morning — set the focus, then trigger:**
-1. Write `<product-repo>/.loop/daily-focus/latest.md` (what to do today, value ranking, the policy fields the planner obeys — `value_threshold`, `recommended_cycles`, `stop_condition`, any `preapproved_medium_risk` envelope).
-2. `loop start` (or `loop resume`). The next cycle's planner reads that focus as its execution scope.
+**Morning — decide value, then approve:**
+1. `loop morning [project...]` scans registered projects, reads current loop state/digests, ranks value-first work, assigns low/medium/high risk, and writes:
+   - `loop-engine/pm-reviews/YYYY-MM-DD.md`
+   - `loop-engine/pm-reviews/latest.md`
+2. `loop approve <project>` writes that project's approved focus to:
+   - `<product-repo>/.loop/daily-focus/YYYY-MM-DD.md`
+   - `<product-repo>/.loop/daily-focus/latest.md`
+   - `loop-engine/approvals/YYYY-MM-DD.{json,md}`
+3. Medium-risk work requires an explicit envelope:
+   - `loop approve <project> --medium-envelope <name> --allowed-file ... --verification-command ...`
 
-**🌙 Evening — recap, then score:**
-1. `loop pause`
-2. `loop digest` → refreshes `loop-engine/reports/<project>/latest.md` + `.html` — the **recap**: what merged, the PRs, before/after, and the approval queue.
-3. Write `loop-engine/evening-scorecards/latest.md` (did today's success criteria land?). Tomorrow's planner reads it.
+**Day — execute only approved work:**
+1. `loop start-day [project...]` starts approved projects only.
+2. Low-risk work may run unattended after value/verification gates.
+3. Medium-risk work runs its first cycle with `supervised=true`, then continues hourly only if that first cycle does not leave `waiting_for_human`.
+4. Budgets and stop rules come from daily focus: `recommended_cycles`, `stop_condition`, `value_threshold`, `max_noop_cycles`.
+
+**Evening — stop, recap, score:**
+1. `loop evening [project...]` pauses active approved projects.
+2. It refreshes project digests and writes:
+   - `loop-engine/evening-scorecards/YYYY-MM-DD.md`
+   - `loop-engine/evening-scorecards/latest.md`
+   - `loop-engine/reports/daily/YYYY-MM-DD.{md,html}`
+3. Tomorrow's morning review reads the latest scorecard before ranking work.
 
 ---
 
@@ -199,10 +221,25 @@ Quick orientation for an operating agent:
 
 | Env var | Purpose |
 |---|---|
+| `LOOP_CONFIG_DIR` | First-run config directory; default `~/.config/loop` |
 | `LINEAR_API_KEY` | Linear API key for milestone/status sync |
 | `LOOP_LINEAR_API_KEY_FILE` | File fallback (default `~/.config/loop/linear-api-key`) |
 | `LOOP_LINEAR_TEAM_KEY` | Linear team key, e.g. `ENG` |
 | `LOOP_LINEAR_TEAM_NAME` | Human-readable Linear team name |
+| `LOOP_NOTIFY_MODE` | `none`, `macos`, or `webhook` |
+| `LOOP_NOTIFY_WEBHOOK_URL` / `LOOP_NOTIFY_WEBHOOK_URL_FILE` | Webhook notification target |
+
+### Notifications / 通知
+
+Notifications are opt-in. Configure them with:
+
+```bash
+loop notify setup --notify-mode macos
+loop notify test
+loop notify status
+```
+
+The engine notifies only high-signal events by default: `needs_human`, merged work, and evening recap completion. Every notification attempt is also recorded in `loop-engine/logs/notifications.jsonl`.
 
 ### Output language / 输出语言
 
@@ -255,11 +292,13 @@ Control-plane `control_gate.reason` (why the loop paused — the gated items, if
 
 > A failed auto-merge is **not** a reason code: the cycle ends `needs_human` with the task marked `pass` but no merged PR — check the run log / `cycle-summary.json` and resolve the conflict on the pilot branch.
 
+Day-start `LOOP_BLOCKED` reasons: `no_daily_approvals` means run `loop morning` then `loop approve <project>`; `not_approved_today` means the named project was not approved in today's approval artifact.
+
 ---
 
 ## Runtime artifacts / 运行产物
 
-Git-ignored by design — they hold local paths, private strategy, and agent transcripts. **Keep them out of public repos:** `loop-engine/runs/`, `reports/`, `registry.json`, `state.json`, `pm-reviews/`, `human-feedback/`, `knowledge/`, `logs/`, `locks/`, `worktrees/`.
+Git-ignored by design — they hold local paths, private strategy, and agent transcripts. **Keep them out of public repos:** `loop-engine/runs/`, `reports/`, `registry.json`, `state.json`, `pm-reviews/`, `approvals/`, `evening-scorecards/`, `human-feedback/`, `knowledge/`, `logs/`, `locks/`, `worktrees/`.
 
 ## Repository layout / 仓库结构
 

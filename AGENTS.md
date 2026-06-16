@@ -5,8 +5,8 @@
 
 ## What loop is (for you)
 
-`loop` is a control plane that drives a coding agent through a gated cycle on a local Git repo:
-`planner → value/risk gates → worker (isolated worktree) → verification (sandboxed) → reviewer → auto PR + merge → digest → memory`.
+`loop` is a daily product operating loop around local Git repos:
+`morning review → approval envelope → planner → value/risk gates → worker (isolated worktree) → verification (sandboxed) → reviewer → auto PR + merge → digest → evening scorecard → memory`.
 You operate it through the `loop` CLI (or `python3 loop-engine/bin/loopctl.py <cmd> --project <id>`). You do **not** edit the engine, prompts, or reviewer output to influence outcomes.
 
 ## First, relay these safety facts to your human
@@ -27,7 +27,10 @@ Before the human starts `loop` (especially unattended), tell them, plainly:
   - `waiting_for_human` → `null`, or `{ "reason": <code>, "issue_path": <path> }`
   - `runs[-1].status` → `merged | no_op | needs_human | failed | ...`
 - **Read the recap from a file**, not by re-running digest: `loop-engine/reports/<project>/latest.md`.
+- **Start each day with PM review:** `loop morning` writes `pm-reviews/YYYY-MM-DD.md`; `loop approve <project>` writes the project's `.loop/daily-focus/latest.md`.
+- **Start approved projects only:** `loop start-day` reads `approvals/latest.json`; it refuses projects not approved today.
 - **Trigger one cycle:** `loop run-now` (add `--supervised` only when a preapproved medium-risk envelope exists for the queued work).
+- **End the day:** `loop evening` pauses active approved projects, refreshes digests, and writes `evening-scorecards/YYYY-MM-DD.md`.
 - **Lifecycle:** `loop pause` / `loop resume` / `loop stop`. `loop init` registers a new project (fails closed if prerequisites are missing).
 - **Escalate, never bypass.** Anything in `waiting_for_human` is a human decision. Surface it; do not reword issues or prompts to force a pass.
 
@@ -67,7 +70,13 @@ agents_config: 'registry.json -> agents.{planner|worker|reviewer}.{model: ..., [
 output_language: 'registry.json project field (or LOOP_OUTPUT_LANGUAGE env); default English. Localizes generated PROSE only; structural headers + machine tokens (REVIEW_STATUS, risk low/medium/high) STAY English by design because the engine parses them. Prose localization is best-effort by the agent.'
 
 commands:
+  setup:    { in: "operator machine", out: "~/.config/loop/config.json + missing-action prompts" }
   init:     { in: "product repo cwd", out: ".loop/contract.yaml + registry + pilot branch", fail: "LOOP_BLOCKED <reason>" }
+  morning:  { in: "registered projects", out: "pm-reviews/YYYY-MM-DD.md + latest.md, value-ranked portfolio board" }
+  approve:  { in: "project [--medium-envelope ...]", out: ".loop/daily-focus/latest.md + approvals/latest.json" }
+  reject:   { in: "project", out: "approvals/latest.json rejection record" }
+  start-day: { in: "today's approved projects", out: "approved loops active; medium first run supervised" }
+  evening:  { in: "approved projects", out: "evening-scorecards/YYYY-MM-DD.md + reports/daily/YYYY-MM-DD.md/html" }
   status:   { in: "project", out: "human text or JSON (--json)", reads: "state.json" }
   run-now:  { in: "project [--supervised]", out: "one full cycle or no-op", fail: "waiting_for_human <reason>" }
   start:    { in: "initialized project", out: "scheduler loaded, job active, first cycle immediate" }
@@ -76,6 +85,7 @@ commands:
   stop:     { in: "project", out: "job stopped, scheduler unloaded for that project" }
   digest:   { in: "project [--json]", out: "reports/<project>/latest.md + .html" }
   doctor:   { in: "project (optional)", out: "PASS/FAIL preflight: git, gh+auth, sandbox-exec, the provider CLI in use" }
+  notify:   { in: "setup|test|status", out: "macOS/webhook notification config + logs/notifications.jsonl" }
   init --provider codex|claude: bootstrap an all-codex or all-claude project (default codex)
 
 gates:                      # in cycle order
@@ -100,7 +110,11 @@ sandbox_scope:
 runtime_artifacts:          # git-ignored; never commit to a public repo
   state: loop-engine/state.json
   runs: loop-engine/runs/<run_id>/
+  pm_review: loop-engine/pm-reviews/latest.md
+  approvals: loop-engine/approvals/latest.json
+  evening_scorecard: loop-engine/evening-scorecards/latest.md
   digest: loop-engine/reports/<project>/latest.md
   memory: loop-engine/knowledge/<project>/STATE.md
   registry: loop-engine/registry.json
+  notifications: loop-engine/logs/notifications.jsonl
 ```
