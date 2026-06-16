@@ -79,6 +79,7 @@ DEFAULT_VALUE_THRESHOLD = 3
 DEFAULT_MAX_NOOP_CYCLES = 2
 CONFIG_DIR = Path(os.environ.get("LOOP_CONFIG_DIR", str(Path.home() / ".config" / "loop"))).expanduser()
 CONFIG_PATH = CONFIG_DIR / "config.json"
+PORTFOLIO_MODES = {"loop", "plan-only", "read-only", "hold"}
 
 
 class LoopBlocked(RuntimeError):
@@ -106,6 +107,30 @@ def load_config() -> dict:
 def save_config(data: dict) -> None:
     data.setdefault("version", 1)
     write_json(CONFIG_PATH, data)
+
+
+def portfolio_path() -> Path:
+    return CONFIG_DIR / "portfolio.json"
+
+
+def empty_portfolio() -> dict:
+    return {"version": 1, "projects": {}}
+
+
+def load_portfolio() -> dict:
+    path = portfolio_path()
+    if not path.exists():
+        return empty_portfolio()
+    data = load_json(path)
+    data.setdefault("version", 1)
+    data.setdefault("projects", {})
+    return data
+
+
+def save_portfolio(data: dict) -> None:
+    data.setdefault("version", 1)
+    data.setdefault("projects", {})
+    write_json(portfolio_path(), data)
 
 
 def now_iso() -> str:
@@ -279,6 +304,31 @@ def run(cmd: list[str], cwd: Path, log_path: Path | None = None, check: bool = T
 def slugify_project_id(name: str) -> str:
     slug = re.sub(r"[^a-zA-Z0-9]+", "-", name.strip().lower()).strip("-")
     return slug or "project"
+
+
+def github_repo_from_handle(value: str | None) -> str | None:
+    if not value:
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    if text.startswith("git@github.com:"):
+        return github_repo_from_origin(text)
+    if "github.com" in text:
+        return github_repo_from_origin(text)
+    if re.match(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", text):
+        return text
+    return None
+
+
+def looks_like_path(value: str) -> bool:
+    text = value.strip()
+    return text.startswith(("/", "~", ".")) or Path(text).exists()
+
+
+def normalize_portfolio_mode(mode: str | None) -> str:
+    value = str(mode or "plan-only").strip().lower()
+    return value if value in PORTFOLIO_MODES else "plan-only"
 
 
 def git(cmd: list[str], cwd: Path, check: bool = True) -> subprocess.CompletedProcess:
@@ -1057,6 +1107,204 @@ def resolve_project(cwd: Path, project: str | None = None, bootstrap: bool = Fal
         "not_initialized",
         "Project is not initialized for loop; run loop init first.",
         {"repo_path": str(repo_path)},
+    )
+
+
+def portfolio_entry_id(entry: dict) -> str:
+    if entry.get("id"):
+        return str(entry["id"])
+    if entry.get("name"):
+        return slugify_project_id(str(entry["name"]))
+    github_repo = (entry.get("handles") or {}).get("github_repo")
+    if github_repo:
+        return slugify_project_id(str(github_repo).split("/")[-1])
+    local_path = (entry.get("handles") or {}).get("local_path")
+    if local_path:
+        return slugify_project_id(Path(str(local_path)).name)
+    linear_project = (entry.get("handles") or {}).get("linear_project")
+    if linear_project:
+        return slugify_project_id(str(linear_project))
+    url = (entry.get("handles") or {}).get("url")
+    if url:
+        return slugify_project_id(str(url).rstrip("/").split("/")[-1] or "project")
+    return "project"
+
+
+def infer_portfolio_entry(
+    handle: str | None = None,
+    *,
+    name: str | None = None,
+    local_path: str | None = None,
+    github_repo: str | None = None,
+    linear_project: str | None = None,
+    url: str | None = None,
+    mode: str | None = None,
+    default_review: bool = True,
+) -> dict:
+    handles: dict[str, str] = {}
+    raw_handle = (handle or "").strip()
+    if raw_handle:
+        gh = github_repo_from_handle(raw_handle)
+        if gh:
+            handles["github_repo"] = gh
+        elif raw_handle.startswith(("http://", "https://")):
+            handles["url"] = raw_handle
+        elif looks_like_path(raw_handle):
+            handles["local_path"] = str(Path(raw_handle).expanduser())
+        else:
+            name = name or raw_handle
+    if local_path:
+        handles["local_path"] = str(Path(local_path).expanduser())
+    if github_repo:
+        handles["github_repo"] = github_repo_from_handle(github_repo) or github_repo
+    if linear_project:
+        handles["linear_project"] = linear_project
+    if url:
+        handles["url"] = url
+        gh = github_repo_from_handle(url)
+        if gh:
+            handles.setdefault("github_repo", gh)
+
+    local = handles.get("local_path")
+    if local:
+        repo = git_root(Path(local)) if Path(local).exists() else None
+        if repo:
+            handles["local_path"] = str(repo)
+            origin = git_origin_url(repo)
+            gh = github_repo_from_origin(origin)
+            if gh:
+                handles.setdefault("github_repo", gh)
+            registered = registry_project_by_repo(repo)
+            if registered:
+                handles["loop_project_id"] = registered
+
+    display_name = name
+    if not display_name:
+        if handles.get("github_repo"):
+            display_name = str(handles["github_repo"]).split("/")[-1]
+        elif handles.get("linear_project"):
+            display_name = str(handles["linear_project"])
+        elif handles.get("local_path"):
+            display_name = Path(str(handles["local_path"])).name
+        elif handles.get("url"):
+            display_name = str(handles["url"]).rstrip("/").split("/")[-1]
+        else:
+            display_name = raw_handle or "Project"
+    entry = {
+        "id": slugify_project_id(display_name),
+        "name": display_name,
+        "mode": normalize_portfolio_mode(mode),
+        "default_review": bool(default_review),
+        "handles": handles,
+    }
+    if handles.get("loop_project_id"):
+        entry["id"] = str(handles["loop_project_id"])
+        entry["mode"] = "loop"
+    return entry
+
+
+def portfolio_project_readiness(entry: dict) -> str:
+    handles = entry.get("handles") or {}
+    if handles.get("loop_project_id"):
+        return "executable"
+    if handles.get("local_path"):
+        path = Path(str(handles["local_path"]))
+        if not path.exists():
+            return "blocked_missing_local_path"
+        if not git_root(path):
+            return "plan_only_local_non_git"
+        return "blocked_needs_loop_init"
+    if handles.get("github_repo"):
+        return "plan_only_missing_local_path"
+    if handles.get("linear_project"):
+        return "pm_only_missing_local_path"
+    if handles.get("url"):
+        return "pm_only_url"
+    return "identity_only"
+
+
+def portfolio_entry_to_row(entry: dict) -> dict:
+    handles = entry.get("handles") or {}
+    return {
+        "project": entry.get("id") or portfolio_entry_id(entry),
+        "name": entry.get("name") or portfolio_entry_id(entry),
+        "mode": entry.get("mode") or "plan-only",
+        "default_review": bool(entry.get("default_review", True)),
+        "local_path": handles.get("local_path") or "-",
+        "github_repo": handles.get("github_repo") or "-",
+        "linear_project": handles.get("linear_project") or "-",
+        "url": handles.get("url") or "-",
+        "loop_project_id": handles.get("loop_project_id") or "-",
+        "readiness": portfolio_project_readiness(entry),
+    }
+
+
+def upsert_portfolio_entry(entry: dict) -> dict:
+    data = load_portfolio()
+    projects = data.setdefault("projects", {})
+    entry_id = entry.get("id") or portfolio_entry_id(entry)
+    existing = projects.get(entry_id, {})
+    merged = {
+        **existing,
+        **entry,
+        "handles": {
+            **(existing.get("handles") or {}),
+            **(entry.get("handles") or {}),
+        },
+    }
+    merged["id"] = entry_id
+    projects[entry_id] = merged
+    save_portfolio(data)
+    return merged
+
+
+def portfolio_entries(projects: list[str] | None = None) -> list[dict]:
+    data = load_portfolio()
+    entries = data.get("projects") or {}
+    if projects:
+        selected: list[dict] = []
+        for project in projects:
+            if project in entries:
+                selected.append(entries[project])
+                continue
+            # Fall back to a registered loop project if it is not yet in the
+            # portfolio; this preserves explicit one-project commands.
+            cfg = registry_project(project)
+            entry = infer_portfolio_entry(
+                name=cfg.get("name") or project,
+                local_path=cfg.get("repo_path"),
+                github_repo=cfg.get("github_repo"),
+                linear_project=cfg.get("linear_project"),
+                mode="loop",
+            )
+            entry["id"] = project
+            entry["mode"] = "loop"
+            entry.setdefault("handles", {})["loop_project_id"] = project
+            selected.append(entry)
+        return selected
+    return [
+        entry for entry in entries.values()
+        if entry.get("default_review", True)
+    ]
+
+
+def ensure_portfolio_for_morning(projects: list[str] | None) -> None:
+    if projects:
+        return
+    if (load_portfolio().get("projects") or {}):
+        return
+    raise LoopBlocked(
+        "portfolio_missing",
+        "No portfolio registry found. Add projects before the first daily PM review.",
+        {
+            "next_actions": [
+                "loop portfolio init",
+                "loop portfolio add /path/to/project",
+                "loop portfolio add https://github.com/owner/repo",
+                "loop portfolio add --linear-project 'Project Name'",
+            ],
+            "portfolio_path": str(portfolio_path()),
+        },
     )
 
 
@@ -3234,11 +3482,15 @@ def project_pm_snapshot(project: str, baseline_row: dict) -> dict:
         },
         "recent_runs_today": today_project_runs(project),
         "baseline_pm_row": baseline_row,
+        "portfolio": baseline_row.get("portfolio") or {},
+        "readiness": baseline_row.get("readiness") or "executable",
     }
 
 
 def pm_agent_config(projects: list[str]) -> dict:
     for project in projects:
+        if project not in registry_data().get("projects", {}):
+            continue
         agents = registry_project(project).get("agents") or {}
         for role in ("pm_reviewer", "pm", "planner"):
             cfg = agents.get(role)
@@ -3349,10 +3601,13 @@ def normalize_medium_envelope(raw: object, cfg: dict, row: dict, has_medium_task
 
 
 def normalize_pm_row(raw: dict, baseline: dict) -> dict:
-    cfg = registry_project(baseline["project"])
+    registered = bool(baseline.get("loop_registered")) or baseline["project"] in registry_data().get("projects", {})
+    cfg = registry_project(baseline["project"]) if registered else {}
     decision = str(raw.get("decision") or baseline.get("decision") or "plan-only").lower().strip()
-    if decision not in {"loop", "plan-only", "hold", "read-only"}:
+    if decision not in {"loop", "plan-only", "hold", "read-only", "blocked"}:
         decision = "plan-only"
+    if not registered and decision == "loop":
+        decision = "blocked"
     raw_tasks = raw.get("tasks") if isinstance(raw.get("tasks"), list) else []
     tasks = [
         normalize_pm_task(task if isinstance(task, dict) else {}, index)
@@ -3381,7 +3636,9 @@ def normalize_pm_row(raw: dict, baseline: dict) -> dict:
     }
     if row["top_risk"] not in {"low", "medium", "high"}:
         row["top_risk"] = top["risk"]
-    has_medium_task = any(task["risk"] == "medium" for task in tasks) or row["top_risk"] == "medium"
+    row["portfolio"] = baseline.get("portfolio") or {}
+    row["readiness"] = baseline.get("readiness") or ("executable" if registered else "portfolio_only")
+    has_medium_task = registered and (any(task["risk"] == "medium" for task in tasks) or row["top_risk"] == "medium")
     row["medium_envelope"] = normalize_medium_envelope(raw.get("medium_envelope"), cfg, row, has_medium_task)
     if has_medium_task and not row["medium_risk_question"]:
         row["medium_risk_question"] = (
@@ -3502,6 +3759,71 @@ def project_pm_row(project: str) -> dict:
         "stop_condition": "Stop when the selected user-visible benefit is shipped, or when no candidate clears the value line.",
         "value_threshold": 3,
         "tasks": tasks,
+        "loop_registered": True,
+    }
+
+
+def portfolio_pm_row(entry: dict) -> dict:
+    row = portfolio_entry_to_row(entry)
+    readiness = row["readiness"]
+    mode = normalize_portfolio_mode(str(row.get("mode") or "plan-only"))
+    decision = mode if mode in {"plan-only", "read-only", "hold"} else "blocked"
+    if readiness == "executable" and mode == "loop":
+        decision = "loop"
+    elif readiness.startswith("blocked"):
+        decision = "blocked"
+    task = "Clarify today's highest-value product outcome and complete missing execution links."
+    benefit = "Keeps the project visible in the portfolio without pretending it is ready for autonomous execution."
+    tasks = [{
+        "rank": 1,
+        "task": task,
+        "value_score": 3,
+        "risk": "low",
+        "approval_path": "PM review only; execution blocked until portfolio links are complete",
+        "benefit": benefit,
+        "category": "portfolio_readiness",
+        "surface": "portfolio",
+    }]
+    return {
+        "project": row["project"],
+        "name": row["name"],
+        "decision": decision,
+        "today_focus": task,
+        "top_value_task": task,
+        "top_risk": "low",
+        "approval_needed": "complete local/GitHub/Linear links before execution" if decision == "blocked" else "PM review only",
+        "user_benefit": benefit,
+        "success_criteria": "Portfolio entry is verified and any missing local/GitHub/Linear link is either filled or intentionally deferred.",
+        "reason": f"mode={mode} readiness={readiness}",
+        "recommended_cycles": 0,
+        "stop_condition": "Do not run execution loop until the portfolio entry is executable.",
+        "value_threshold": 3,
+        "tasks": tasks,
+        "portfolio": row,
+        "readiness": readiness,
+        "loop_registered": False,
+    }
+
+
+def portfolio_pm_snapshot(entry: dict, baseline_row: dict) -> dict:
+    handles = entry.get("handles") or {}
+    local_path = handles.get("local_path")
+    readme = "No local path provided."
+    git_status = "No local path provided."
+    if local_path:
+        path = Path(str(local_path))
+        readme = safe_repo_file_snapshot(path, "README.md", max_chars=5000) if path.exists() else "Local path missing."
+        git_status = safe_git_status(path) if path.exists() else "Local path missing."
+    return {
+        "project": baseline_row["project"],
+        "name": baseline_row["name"],
+        "portfolio": baseline_row.get("portfolio") or portfolio_entry_to_row(entry),
+        "readiness": baseline_row.get("readiness") or portfolio_project_readiness(entry),
+        "readme": readme,
+        "git_status": git_status,
+        "status": {"loop_status": "not_registered"},
+        "recent_runs_today": [],
+        "baseline_pm_row": baseline_row,
     }
 
 
@@ -3520,11 +3842,32 @@ def render_morning_review(rows: list[dict], summary: str = "", questions: list[s
         "",
         summary or "PM review ranked today's product opportunities by value.",
         "",
+        "## Portfolio Registry Verification",
+        "",
+        "Verify this is the full portfolio before approving today's loops. Add missing projects with `loop portfolio add ...`.",
+        "",
+        "| Project | Mode | Default Review | Readiness | Local Path | GitHub | Linear | URL |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- |",
+    ]
+    for row in rows:
+        portfolio = row.get("portfolio") or {}
+        lines.append(
+            f"| {display_text(portfolio.get('project') or row.get('project'))} | "
+            f"{display_text(portfolio.get('mode') or row.get('decision'))} | "
+            f"{display_text(portfolio.get('default_review', True))} | "
+            f"{display_text(row.get('readiness') or portfolio.get('readiness') or '-')} | "
+            f"{display_text(portfolio.get('local_path') or '-')} | "
+            f"{display_text(portfolio.get('github_repo') or '-')} | "
+            f"{display_text(portfolio.get('linear_project') or '-')} | "
+            f"{display_text(portfolio.get('url') or '-')} |"
+        )
+    lines.extend([
+        "",
         "## Portfolio Board",
         "",
         "| Project | Decision | Today Focus | Top Value Task | Top Risk | Approval Needed | User Benefit | Success Criteria | Reason |",
         "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
-    ]
+    ])
     for row in rows:
         lines.append(
             "| "
@@ -3627,16 +3970,35 @@ def render_morning_review(rows: list[dict], summary: str = "", questions: list[s
 
 
 def write_morning_review(projects: list[str] | None = None) -> dict:
-    project_ids = registered_project_ids(projects)
-    baseline_rows = [project_pm_row(project) for project in project_ids]
+    ensure_portfolio_for_morning(projects)
+    entries = portfolio_entries(projects)
+    if not entries:
+        raise LoopBlocked(
+            "portfolio_no_review_projects",
+            "Portfolio exists but no projects are enabled for daily review.",
+            {"portfolio_path": str(portfolio_path())},
+        )
+    baseline_rows: list[dict] = []
+    snapshots: list[dict] = []
+    for entry in entries:
+        handles = entry.get("handles") or {}
+        loop_project = handles.get("loop_project_id")
+        if loop_project and loop_project in registry_data().get("projects", {}):
+            row = project_pm_row(loop_project)
+            row["portfolio"] = portfolio_entry_to_row(entry)
+            row["readiness"] = portfolio_project_readiness(entry)
+            baseline_rows.append(row)
+            snapshots.append(project_pm_snapshot(loop_project, row))
+        else:
+            row = portfolio_pm_row(entry)
+            baseline_rows.append(row)
+            snapshots.append(portfolio_pm_snapshot(entry, row))
     baseline_rows.sort(key=lambda row: int(row["tasks"][0]["value_score"]), reverse=True)
     paths = pm_review_paths()
     snapshot = {
         "date": today_date(),
-        "projects": [
-            project_pm_snapshot(row["project"], row)
-            for row in baseline_rows
-        ],
+        "portfolio_registry": [row.get("portfolio") for row in baseline_rows],
+        "projects": snapshots,
         "previous_evening_scorecard": markdown_snapshot(
             ENGINE_ROOT / "evening-scorecards" / "latest.md",
             ENGINE_ROOT,
@@ -3655,7 +4017,7 @@ def write_morning_review(projects: list[str] | None = None) -> dict:
         cwd,
         paths["agent_output"],
         paths["assets"],
-        pm_agent_config(project_ids),
+        pm_agent_config([row["project"] for row in baseline_rows]),
     )
     plan = normalize_pm_plan(load_agent_pm_plan(paths["agent_plan"]), baseline_rows)
     text = render_morning_review(
@@ -3825,6 +4187,93 @@ def send_notification(event: str, title: str, body: str, project: str | None = N
     return False
 
 
+def portfolio_add_command(
+    handle: str | None,
+    name: str | None,
+    local_path: str | None,
+    github_repo: str | None,
+    linear_project: str | None,
+    url: str | None,
+    mode: str | None,
+    default_review: bool,
+) -> None:
+    entry = infer_portfolio_entry(
+        handle,
+        name=name,
+        local_path=local_path,
+        github_repo=github_repo,
+        linear_project=linear_project,
+        url=url,
+        mode=mode,
+        default_review=default_review,
+    )
+    saved = upsert_portfolio_entry(entry)
+    row = portfolio_entry_to_row(saved)
+    print(f"PORTFOLIO_ADDED project={row['project']} readiness={row['readiness']} mode={row['mode']}")
+    print(f"PORTFOLIO_PATH {portfolio_path()}")
+
+
+def portfolio_init_command() -> None:
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    data = load_portfolio()
+    if data.get("projects"):
+        print(f"PORTFOLIO_EXISTS {portfolio_path()} projects={len(data['projects'])}")
+        portfolio_status_command(json_output=False)
+        return
+    if not sys.stdin.isatty():
+        save_portfolio(data)
+        print(f"PORTFOLIO_CREATED {portfolio_path()}")
+        print("PORTFOLIO_ACTION add projects with any handle:")
+        print("  loop portfolio add /path/to/project")
+        print("  loop portfolio add https://github.com/owner/repo")
+        print("  loop portfolio add --linear-project 'Project Name'")
+        print("  loop portfolio add --name 'Idea Name'")
+        return
+    print("Create your loop portfolio. Paste one project handle per line; blank line finishes.")
+    print("Accepted handles: local path, GitHub repo/URL, Linear project name, product URL, or plain name.")
+    while True:
+        handle = input("Project handle: ").strip()
+        if not handle:
+            break
+        mode = input("Mode [loop/plan-only/read-only/hold] (default plan-only): ").strip() or "plan-only"
+        portfolio_add_command(handle, None, None, None, None, None, mode, True)
+    print(f"PORTFOLIO_READY {portfolio_path()}")
+
+
+def portfolio_status_command(json_output: bool = False) -> None:
+    data = load_portfolio()
+    rows = [portfolio_entry_to_row(entry) for entry in (data.get("projects") or {}).values()]
+    rows.sort(key=lambda row: row["project"])
+    if json_output:
+        print(json.dumps({"path": str(portfolio_path()), "projects": rows}, indent=2, ensure_ascii=False))
+        return
+    print(f"PORTFOLIO {portfolio_path()} projects={len(rows)}")
+    for row in rows:
+        print(
+            f"PORTFOLIO_PROJECT {row['project']} mode={row['mode']} "
+            f"review={str(row['default_review']).lower()} readiness={row['readiness']} "
+            f"path={row['local_path']} github={row['github_repo']} linear={row['linear_project']}"
+        )
+
+
+def portfolio_command(args: argparse.Namespace) -> None:
+    if args.portfolio_command == "init":
+        portfolio_init_command()
+    elif args.portfolio_command == "add":
+        portfolio_add_command(
+            args.handle,
+            args.name,
+            args.path,
+            args.github,
+            args.linear_project,
+            args.url,
+            args.mode,
+            not args.no_review,
+        )
+    elif args.portfolio_command == "status":
+        portfolio_status_command(json_output=args.json)
+
+
 def setup_command(
     yes: bool,
     provider: str | None,
@@ -3876,6 +4325,8 @@ def setup_command(
                 subprocess.run(["gh", "auth", "login"])
     print(f"SETUP_CONFIG {CONFIG_PATH}")
     print(f"SETUP_PROVIDER {selected_provider}")
+    if not (load_portfolio().get("projects") or {}):
+        print("SETUP_ACTION run: loop portfolio init")
     print("SETUP_COMPLETE")
 
 
@@ -4132,6 +4583,15 @@ def init_command(project: str | None, cwd: Path, provider: str | None = None) ->
     if provider:
         os.environ["LOOP_DEFAULT_PROVIDER"] = provider
     resolved = resolve_project(cwd, project=project, bootstrap=True)
+    cfg = registry_project(resolved)
+    upsert_portfolio_entry(infer_portfolio_entry(
+        name=cfg.get("name") or resolved,
+        local_path=cfg.get("repo_path"),
+        github_repo=cfg.get("github_repo"),
+        linear_project=cfg.get("linear_project"),
+        mode="loop",
+        default_review=True,
+    ))
     print(f"LOOP_INITIALIZED project={resolved}")
     print_status(resolved, False)
 
@@ -4940,6 +5400,20 @@ def main() -> int:
     init_parser.add_argument("--provider", choices=["codex", "claude"])
     doctor_parser = sub.add_parser("doctor")
     doctor_parser.add_argument("--project")
+    portfolio_parser = sub.add_parser("portfolio")
+    portfolio_sub = portfolio_parser.add_subparsers(dest="portfolio_command", required=True)
+    portfolio_sub.add_parser("init")
+    portfolio_add = portfolio_sub.add_parser("add")
+    portfolio_add.add_argument("handle", nargs="?")
+    portfolio_add.add_argument("--name")
+    portfolio_add.add_argument("--path")
+    portfolio_add.add_argument("--github")
+    portfolio_add.add_argument("--linear-project")
+    portfolio_add.add_argument("--url")
+    portfolio_add.add_argument("--mode", choices=sorted(PORTFOLIO_MODES), default="plan-only")
+    portfolio_add.add_argument("--no-review", action="store_true")
+    portfolio_status = portfolio_sub.add_parser("status")
+    portfolio_status.add_argument("--json", action="store_true")
     morning_parser = sub.add_parser("morning")
     morning_parser.add_argument("--project", action="append")
     morning_parser.add_argument("--start", action="store_true")
@@ -5020,6 +5494,8 @@ def main() -> int:
             init_command(args.project, cwd, provider=args.provider)
         elif args.command == "doctor":
             doctor_command(args.project, cwd)
+        elif args.command == "portfolio":
+            portfolio_command(args)
         elif args.command == "morning":
             morning_command(args.project, start_after=args.start)
         elif args.command == "approve":

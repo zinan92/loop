@@ -156,6 +156,88 @@ def test_facade_supports_doctor_and_init_provider(monkeypatch):
     assert loop_facade.main() == 0
     assert captured["cmd"][-4:] == ["approve", "--approve-medium", "--project", "demo"]
 
+    monkeypatch.setattr(sys, "argv", ["loop", "portfolio", "add", "https://github.com/acme/app", "--mode", "plan-only"])
+    assert loop_facade.main() == 0
+    assert captured["cmd"][-5:] == ["portfolio", "add", "https://github.com/acme/app", "--mode", "plan-only"]
+
+
+def test_portfolio_add_accepts_multiple_handle_types(monkeypatch, tmp_path, capsys):
+    repo = make_repo(tmp_path)
+    patch_engine(monkeypatch, tmp_path, repo)
+
+    loopctl.portfolio_add_command(str(repo), "Local Demo", None, None, None, None, "plan-only", True)
+    loopctl.portfolio_add_command("https://github.com/acme/app", None, None, None, None, None, "read-only", True)
+    loopctl.portfolio_add_command(None, None, None, None, "Content Pipeline", None, "hold", False)
+
+    output = capsys.readouterr().out
+    data = loopctl.load_portfolio()
+    rows = {
+        row["project"]: row
+        for row in [loopctl.portfolio_entry_to_row(entry) for entry in data["projects"].values()]
+    }
+    assert "PORTFOLIO_ADDED" in output
+    assert rows["local-demo"]["local_path"] == str(repo)
+    assert rows["app"]["github_repo"] == "acme/app"
+    assert rows["content-pipeline"]["linear_project"] == "Content Pipeline"
+    assert rows["content-pipeline"]["default_review"] is False
+
+
+def test_morning_without_portfolio_requires_onboarding(monkeypatch, tmp_path):
+    repo = make_repo(tmp_path)
+    patch_engine(monkeypatch, tmp_path, repo)
+
+    try:
+        loopctl.write_morning_review(None)
+    except loopctl.LoopBlocked as exc:
+        assert exc.reason == "portfolio_missing"
+        assert "loop portfolio init" in exc.details["next_actions"]
+    else:
+        raise AssertionError("first daily PM review should require portfolio onboarding")
+
+
+def test_morning_review_includes_portfolio_verification_board(monkeypatch, tmp_path):
+    repo = make_repo(tmp_path)
+    engine = patch_engine(monkeypatch, tmp_path, repo)
+    loopctl.save_portfolio({
+        "version": 1,
+        "projects": {
+            "demo": {
+                "id": "demo",
+                "name": "Demo",
+                "mode": "loop",
+                "default_review": True,
+                "handles": {
+                    "loop_project_id": "demo",
+                    "local_path": str(repo),
+                    "github_repo": "owner/demo",
+                },
+            },
+            "newsletter": {
+                "id": "newsletter",
+                "name": "Newsletter",
+                "mode": "plan-only",
+                "default_review": True,
+                "handles": {
+                    "linear_project": "Newsletter",
+                    "url": "https://example.com/newsletter",
+                },
+            },
+        },
+    })
+    patch_pm_agent(monkeypatch)
+
+    result = loopctl.write_morning_review(None)
+
+    text = result["markdown"]
+    assert "Portfolio Registry Verification" in text
+    assert "Verify this is the full portfolio" in text
+    assert "| demo | loop | True | executable |" in text
+    assert "| newsletter | plan-only | True | pm_only_missing_local_path |" in text
+    snapshot = json.loads(result["paths"]["snapshot"].read_text())
+    assert [row["project"] for row in snapshot["portfolio_registry"]] == ["demo", "newsletter"]
+    assert result["plan"]["projects"][0]["project"] == "demo"
+    assert any(row["project"] == "newsletter" for row in result["plan"]["projects"])
+
 
 def test_morning_review_writes_cross_project_board(monkeypatch, tmp_path):
     repo = make_repo(tmp_path)

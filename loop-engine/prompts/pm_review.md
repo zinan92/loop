@@ -16,6 +16,13 @@ Output language:
 - Keep JSON keys and risk values in English exactly as requested.
 
 Important product rules:
+- Treat `portfolio_registry` in the snapshot as the human's full portfolio for
+  the day. Include every project exactly once, even if it is not executable yet.
+- A project whose readiness is not `executable` may receive `plan-only`,
+  `read-only`, `hold`, or `blocked`, but must not be recommended for execution
+  with `decision: "loop"`.
+- Use missing local path / GitHub / Linear signals as portfolio readiness work;
+  do not pretend an uninitialized or pathless project can run an autonomous loop.
 - Rank by value first. Risk affects approval path, not ranking.
 - Do not recommend low-value work just because it is safer or easier.
 - If the highest-value work is medium risk, make the approval question explicit.

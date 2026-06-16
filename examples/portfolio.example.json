@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "projects": {
+    "tokenpulse": {
+      "id": "tokenpulse",
+      "name": "TokenPulse",
+      "mode": "loop",
+      "default_review": true,
+      "handles": {
+        "local_path": "/Users/operator/work/tokenpulse",
+        "github_repo": "operator/tokenpulse",
+        "linear_project": "TokenPulse",
+        "loop_project_id": "tokenpulse"
+      }
+    },
+    "newsletter": {
+      "id": "newsletter",
+      "name": "Newsletter",
+      "mode": "plan-only",
+      "default_review": true,
+      "handles": {
+        "github_repo": "operator/newsletter",
+        "linear_project": "Newsletter"
+      }
+    },
+    "video-editing": {
+      "id": "video-editing",
+      "name": "Video Editing",
+      "mode": "hold",
+      "default_review": true,
+      "handles": {
+        "url": "https://example.com/video-editing-brief"
+      }
+    }
+  }
+}

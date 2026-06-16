@@ -82,26 +82,26 @@
 
   <h1><span class="b">loop</span> — how it works</h1>
   <p class="sub">A value-ranked, auditable, pausable coding-agent loop. <span class="mono">Agents: Codex or Claude Code (per role) · macOS only.</span></p>
-  <p class="sub" style="color:#8b949e">把一次性的 coding-agent prompt 变成「按价值排序、可审计、可暂停」的执行闭环。这页讲清：什么时候触发、触发后它自己干什么。</p>
+  <p class="sub" style="color:#8b949e">把一次性的 coding-agent prompt 变成「portfolio verification → PM review → 白天执行 → 晚间复盘」的闭环。这页讲清：什么时候触发、触发后它自己干什么。</p>
   <p class="links">📄 <a href="https://github.com/zinan92/loop/blob/main/README.md">README</a> &nbsp;·&nbsp; 🤖 <a href="https://github.com/zinan92/loop/blob/main/AGENTS.md">AGENTS.md</a> &nbsp;·&nbsp; ⚙️ <a href="https://github.com/zinan92/loop/tree/main/examples">examples</a></p>
 
   <!-- TRIGGERS -->
-  <h2>1 · Triggers <span class="cn">什么时候开始一轮</span></h2>
+  <h2>1 · Triggers <span class="cn">什么时候开始</span></h2>
   <div class="row three">
     <div class="card">
-      <div class="t">▶ run-now</div>
-      <div class="d">One cycle, right now. 立刻跑一轮（最常用于试跑 / 白天手动推进）。</div>
-      <div class="cmd mono">loop run-now</div>
+      <div class="t">① portfolio onboarding</div>
+      <div class="d">First run asks for the portfolio registry once. Add projects by local path, GitHub, Linear, URL, or plain name. 首次建立项目组合。</div>
+      <div class="cmd mono">loop portfolio init · add</div>
     </div>
     <div class="card">
-      <div class="t">⏱ hourly tick</div>
-      <div class="d">After <span class="mono">loop start</span>: one cycle per hour, forever, until <span class="mono">loop stop</span>. 每小时一轮，跑到喊停。</div>
-      <div class="cmd mono">loop start</div>
+      <div class="t">② morning review + approval</div>
+      <div class="d">Every morning verifies the full portfolio, ranks product value, then waits for explicit approval. 每天早上先确认 portfolio，再批今天跑什么。</div>
+      <div class="cmd mono">loop morning · approve</div>
     </div>
     <div class="card">
-      <div class="t">⏸ pause / stop</div>
-      <div class="d">Halt anytime. User-space daemon — not launchd/cron, doesn't survive reboot. 随时暂停/停止。</div>
-      <div class="cmd mono">loop pause · loop stop</div>
+      <div class="t">③ day loop / run-now</div>
+      <div class="d">Approved projects start now, then run hourly until budget, stop condition, pause, or stop. 已批准项目先跑一轮，然后每小时推进。</div>
+      <div class="cmd mono">loop start-day · run-now · stop</div>
     </div>
   </div>
 
@@ -113,7 +113,7 @@
       <div class="num">1</div>
       <div class="body">
         <div class="h">planner <span class="tag run">agent</span></div>
-        <div class="x">Reads your <b style="color:#8b949e">daily-focus</b> + PM review + last scorecard + bounded memory, then proposes value-scored candidates.<br><span style="color:#6e7681">读你写的每日 focus 和反馈 → 产出按价值打分的候选 → <span class="mono">candidates.json</span> + issue 文件</span></div>
+        <div class="x">Reads the approved <b style="color:#8b949e">daily-focus</b> + PM review + last scorecard + bounded memory, then proposes value-scored candidates.<br><span style="color:#6e7681">读早上批准的 focus 和反馈 → 产出按价值打分的候选 → <span class="mono">candidates.json</span> + issue 文件</span></div>
       </div>
     </div>
 
@@ -187,18 +187,19 @@
     <div class="card" style="border-color:#d2992255">
       <div class="t">🌅 Morning — set focus, then trigger</div>
       <div class="d" style="margin-top:6px">
-        ① Write <span class="mono">.loop/daily-focus/latest.md</span> — today's value ranking + policy (<span class="mono">value_threshold</span>, <span class="mono">recommended_cycles</span>, <span class="mono">stop_condition</span>, any preapproved envelope).<br>
-        ② <span class="mono">loop start</span> / <span class="mono">resume</span> — next cycle's planner reads it as scope.<br>
-        <span style="color:#6e7681">早上写当天的 focus（loop 不自动生成，它读你写的 Markdown），再 start。</span>
+        ① <span class="mono">loop morning</span> — shows the Portfolio Registry Verification board, then writes <span class="mono">pm-reviews/latest.md</span> and a value-ranked plan.<br>
+        ② <span class="mono">loop approve &lt;project&gt;</span> — writes <span class="mono">.loop/daily-focus/latest.md</span>; use <span class="mono">--approve-medium</span> for the whole day's bounded medium-risk envelope.<br>
+        ③ <span class="mono">loop start-day</span> — starts only approved projects; first cycle runs immediately, then hourly.<br>
+        <span style="color:#6e7681">早上先确认完整 portfolio，再按价值排序，批准后才启动白天 loop。</span>
       </div>
     </div>
     <div class="card" style="border-color:#58a6ff55">
       <div class="t">🌙 Evening — recap, then score</div>
       <div class="d" style="margin-top:6px">
-        ① <span class="mono">loop pause</span><br>
-        ② <span class="mono">loop digest</span> → the <b style="color:#58a6ff">recap</b>: what merged, PRs, before/after, approval queue → <span class="mono">loop-engine/reports/&lt;project&gt;/latest.md</span>.<br>
-        ③ Write <span class="mono">loop-engine/evening-scorecards/latest.md</span> — tomorrow's planner reads it.<br>
-        <span style="color:#6e7681">晚上 pause → digest 出复盘 → 写 scorecard 给明天。</span>
+        ① <span class="mono">loop evening</span> pauses active loops (or named projects).<br>
+        ② It refreshes digests: what merged, before/after, approval queue → <span class="mono">loop-engine/reports/&lt;project&gt;/latest.md</span>.<br>
+        ③ It writes <span class="mono">loop-engine/evening-scorecards/latest.md</span> and a daily report; tomorrow's PM review reads them.<br>
+        <span style="color:#6e7681">晚上统一暂停、出复盘和 scorecard，喂给明天。</span>
       </div>
     </div>
   </div>
@@ -212,7 +213,7 @@
     </div>
     <div class="tier me">
       <div class="t">Medium-risk → supervised</div>
-      <div class="d">visible UI, small product-surface or schema changes. Needs a preapproved envelope + <span class="mono">run-now --supervised</span> first. 要预批 envelope + 监督首跑。</div>
+      <div class="d">visible UI, small product-surface or schema changes. Needs a same-day approved envelope; the first execution is supervised by <span class="mono">start-day</span> or <span class="mono">run-now --supervised</span>. 要早上预批 envelope + 监督首跑。</div>
     </div>
     <div class="tier hi">
       <div class="t">High-risk → never auto</div>

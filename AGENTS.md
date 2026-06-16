@@ -5,8 +5,8 @@
 
 ## What loop is (for you)
 
-`loop` is a daily product operating loop around local Git repos:
-`morning review → approval envelope → planner → value/risk gates → worker (isolated worktree) → verification (sandboxed) → reviewer → auto PR + merge → digest → evening scorecard → memory`.
+`loop` is a daily product operating loop around a private portfolio registry and local Git repos:
+`portfolio verification → morning review → approval envelope → planner → value/risk gates → worker (isolated worktree) → verification (sandboxed) → reviewer → auto PR + merge → digest → evening scorecard → memory`.
 You operate it through the `loop` CLI (or `python3 loop-engine/bin/loopctl.py <cmd> --project <id>`). You do **not** edit the engine, prompts, or reviewer output to influence outcomes.
 
 ## First, relay these safety facts to your human
@@ -27,7 +27,8 @@ Before the human starts `loop` (especially unattended), tell them, plainly:
   - `waiting_for_human` → `null`, or `{ "reason": <code>, "issue_path": <path> }`
   - `runs[-1].status` → `merged | no_op | needs_human | failed | ...`
 - **Read the recap from a file**, not by re-running digest: `loop-engine/reports/<project>/latest.md`.
-- **Start each day with PM review:** `loop morning` runs the PM Review Agent and writes `pm-reviews/YYYY-MM-DD.{md,json}`; `loop approve <project>` writes the project's `.loop/daily-focus/latest.md`.
+- **Start with portfolio onboarding once:** `loop portfolio init`, then `loop portfolio add ...` using any handle the human has (local path, GitHub repo/URL, Linear project, URL, or plain name). `loop init` also upserts the current repo into the portfolio.
+- **Start each day with PM review:** `loop morning` first shows a Portfolio Registry Verification board, then runs the PM Review Agent and writes `pm-reviews/YYYY-MM-DD.{md,json}`; `loop approve <project>` writes the project's `.loop/daily-focus/latest.md`.
 - **Approve medium risk once per day:** when morning recommends a bounded envelope, `loop approve <project> --approve-medium` approves all same-day medium-risk items that stay inside that envelope. Do not approve medium risk item-by-item inside each cycle.
 - **Start approved projects only:** `loop start-day` reads `approvals/latest.json`; it refuses projects not approved today.
 - **Trigger one cycle:** `loop run-now` (add `--supervised` only when a preapproved medium-risk envelope exists for the queued work).
@@ -54,7 +55,7 @@ Before the human starts `loop` (especially unattended), tell them, plainly:
 
 > A failed auto-merge is **not** a reason code: the cycle ends `needs_human` with the task marked `pass` but no merged PR — inspect the run log / `cycle-summary.json` and resolve the conflict on the pilot branch.
 
-`LOOP_BLOCKED` reasons from `loop init` (no mutation occurs): `not_git_repo`, `missing_github_remote`, `missing_github_auth`, `github_repo_not_found`, `unsupported_platform` (no sandbox-exec / non-macOS), `missing_linear_team` (only when Linear is explicitly enabled). Run `loop doctor` to preflight all of these.
+`LOOP_BLOCKED` reasons from daily setup: `portfolio_missing` means first daily PM review needs `loop portfolio init` + `loop portfolio add ...`; `portfolio_no_review_projects` means every portfolio entry has `default_review=false`. `LOOP_BLOCKED` reasons from `loop init` (no mutation occurs): `not_git_repo`, `missing_github_remote`, `missing_github_auth`, `github_repo_not_found`, `unsupported_platform` (no sandbox-exec / non-macOS), `missing_linear_team` (only when Linear is explicitly enabled). Run `loop doctor` to preflight init prerequisites.
 
 > Not an init reason: a `provider: claude` role whose Claude CLI is absent raises a `missing_claude_cli` **RuntimeError during cycle execution** (planner/worker/reviewer), not during `loop init`.
 
@@ -71,9 +72,10 @@ agents_config: 'registry.json -> agents.{planner|worker|reviewer}.{model: ..., [
 output_language: 'registry.json project field (or LOOP_OUTPUT_LANGUAGE env); default English. Localizes generated PROSE only; structural headers + machine tokens (REVIEW_STATUS, risk low/medium/high) STAY English by design because the engine parses them. Prose localization is best-effort by the agent.'
 
 commands:
+  portfolio: { in: "operator machine", out: "~/.config/loop/portfolio.json via init|add|status; source of truth for daily PM review" }
   setup:    { in: "operator machine", out: "~/.config/loop/config.json + missing-action prompts" }
   init:     { in: "product repo cwd", out: ".loop/contract.yaml + registry + pilot branch", fail: "LOOP_BLOCKED <reason>" }
-  morning:  { in: "registered projects", out: "pm-reviews/YYYY-MM-DD.{md,json} + latest.{md,json}, PM-agent value-ranked portfolio board" }
+  morning:  { in: "portfolio registry + registered project snapshots", out: "portfolio verification board + pm-reviews/YYYY-MM-DD.{md,json} + latest.{md,json}, PM-agent value-ranked portfolio board" }
   approve:  { in: "project [--approve-medium | --medium-envelope ...]", out: ".loop/daily-focus/latest.md + approvals/latest.json" }
   reject:   { in: "project", out: "approvals/latest.json rejection record" }
   start-day: { in: "today's approved projects", out: "approved loops active; medium first run supervised" }
@@ -113,6 +115,7 @@ runtime_artifacts:          # git-ignored; never commit to a public repo
   runs: loop-engine/runs/<run_id>/
   pm_review: loop-engine/pm-reviews/latest.md
   pm_review_plan: loop-engine/pm-reviews/latest.json
+  portfolio: ~/.config/loop/portfolio.json
   approvals: loop-engine/approvals/latest.json
   evening_scorecard: loop-engine/evening-scorecards/latest.md
   digest: loop-engine/reports/<project>/latest.md

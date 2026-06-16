@@ -16,6 +16,7 @@ def usage(code: int = 2) -> int:
         "  /loop init [project] [--provider codex|claude]\n"
         "  /loop setup [--yes] [--provider codex|claude]\n"
         "  /loop doctor [project]\n"
+        "  /loop portfolio init|add|status\n"
         "  /loop morning [project...]\n"
         "  /loop approve [project] [--approve-medium | --medium-envelope NAME]\n"
         "  /loop reject [project]\n"
@@ -114,6 +115,10 @@ def main() -> int:
             return usage()
         loopctl_args = ["notify", rest[0]]
         loopctl_args.extend(rest[1:])
+    elif command == "portfolio":
+        if not rest or rest[0] not in {"init", "add", "status"}:
+            return usage()
+        loopctl_args = ["portfolio"] + rest
     elif command == "scheduler":
         if not rest or rest[0] not in {"install", "load", "status", "uninstall"}:
             return usage()

@@ -105,15 +105,24 @@ export PATH="$HOME/.local/bin:$PATH"   # add to ~/.zshrc to persist
 loop setup --yes                  # writes ~/.config/loop/config.json and prints missing actions
 loop doctor                       # checks gh / sandbox-exec / the agent CLI your registry needs
 
-# 4) Initialize a target product repo (run from INSIDE it)
+# 4) First onboarding: create your portfolio registry
+loop portfolio init
+loop portfolio add /path/to/your-product-repo
+loop portfolio add https://github.com/owner/repo --mode plan-only
+loop portfolio add --linear-project "Newsletter" --mode hold
+loop portfolio status             # private source of truth for daily PM review
+
+# 5) Initialize executable product repos (run from INSIDE each local Git repo)
 cd /path/to/your-product-repo        # must be a clean git repo with a GitHub origin
 loop init --provider codex           # or: --provider claude
                                      # creates .loop/contract.yaml, a baseline tag,
-                                     # a loop/<project>-pilot branch, and registry/state
+                                     # a loop/<project>-pilot branch, registry/state,
+                                     # and upserts this repo into the portfolio
 loop status
 
-# 5) Morning PM review across registered projects
-loop morning                         # PM-agent review; writes pm-reviews/YYYY-MM-DD.{md,json}
+# 6) Morning PM review across the portfolio
+loop morning                         # starts with a Portfolio Registry Verification board,
+                                     # then writes pm-reviews/YYYY-MM-DD.{md,json}
 loop approve <project>               # approve low-risk automatic work only
 # To approve every medium-risk item today inside the PM-recommended envelope:
 loop approve <project> --approve-medium
@@ -122,10 +131,10 @@ loop approve <project> --medium-envelope primary-surface \
   --allowed-file 'src/**' --allowed-file 'tests/**' \
   --verification-command 'git diff --check'
 
-# 6) Start the approved day loop
+# 7) Start the approved day loop
 loop start-day                       # first cycle now, then hourly until stop/pause/budget
 
-# 7) Evening recap
+# 8) Evening recap
 loop evening                         # pauses all active registered loops, writes scorecards + daily report
 ```
 
@@ -156,10 +165,22 @@ By default **only the top-ranked auto-runnable task executes per cycle** (`max_t
 
 ## Daily rhythm: morning & evening / 每日节奏
 
-`loop` now owns the full daily routine: **morning review → approvals → day loop → evening recap**. The loop still keeps the human in charge of direction: morning review proposes and ranks work; only `loop approve` turns it into execution input.
+`loop` now owns the full daily routine: **portfolio verification → morning review → approvals → day loop → evening recap**. The loop still keeps the human in charge of direction: morning review proposes and ranks work; only `loop approve` turns it into execution input.
+
+**First onboarding — build the private portfolio registry once:**
+1. `loop portfolio init` creates `~/.config/loop/portfolio.json`.
+2. Add projects with whatever handle you have:
+   - local path: `loop portfolio add /path/to/project`
+   - GitHub repo or URL: `loop portfolio add owner/repo` or `loop portfolio add https://github.com/owner/repo`
+   - Linear project: `loop portfolio add --linear-project "Project Name"`
+   - plain product name or URL for early ideas
+3. `loop init` also upserts the current repo into the portfolio as an executable `loop` project.
+
+**Daily portfolio verification — shown every morning, not asked from scratch:**
+`loop morning` refuses to run with no portfolio (`LOOP_BLOCKED reason=portfolio_missing`). Once the registry exists, every daily review begins with a **Portfolio Registry Verification** table showing project, mode, review flag, readiness, local path, GitHub, Linear, and URL. The operator should verify this is the full portfolio before approving loops. Missing or non-executable entries stay visible as `plan-only`, `read-only`, `hold`, or `blocked`; they are not silently ignored.
 
 **Morning — decide value, then approve:**
-1. `loop morning [project...]` runs the built-in PM Review Agent over registered project snapshots, reads current loop state/digests/evening scorecards, ranks value-first work, assigns low/medium/high risk, and writes:
+1. `loop morning [project...]` runs the built-in PM Review Agent over the portfolio registry plus registered project snapshots, reads current loop state/digests/evening scorecards, ranks value-first work, assigns low/medium/high risk, and writes:
    - `loop-engine/pm-reviews/YYYY-MM-DD.md`
    - `loop-engine/pm-reviews/latest.md`
    - `loop-engine/pm-reviews/YYYY-MM-DD.json`
@@ -233,6 +254,7 @@ Quick orientation for an operating agent:
 ## Configuration / 配置
 
 - [examples/registry.example.json](examples/registry.example.json) — per-project config (auto-written by `loop init`)
+- [examples/portfolio.example.json](examples/portfolio.example.json) — private portfolio registry shape (auto-written under `~/.config/loop/portfolio.json`)
 - [examples/contract.example.yaml](examples/contract.example.yaml) — the `.loop/contract.yaml` schema
 - [examples/daily-focus.example.md](examples/daily-focus.example.md) — daily focus + preapproved envelope
 
@@ -309,7 +331,7 @@ Control-plane `control_gate.reason` (why the loop paused — the gated items, if
 
 > A failed auto-merge is **not** a reason code: the cycle ends `needs_human` with the task marked `pass` but no merged PR — check the run log / `cycle-summary.json` and resolve the conflict on the pilot branch.
 
-Day-start `LOOP_BLOCKED` reasons: `no_daily_approvals` means run `loop morning` then `loop approve <project>`; `not_approved_today` means the named project was not approved in today's approval artifact.
+Morning/day-start `LOOP_BLOCKED` reasons: `portfolio_missing` means run `loop portfolio init` and add at least one project; `portfolio_no_review_projects` means every portfolio entry has `default_review=false`; `no_daily_approvals` means run `loop morning` then `loop approve <project>`; `not_approved_today` means the named project was not approved in today's approval artifact.
 
 ---
 
