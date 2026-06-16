@@ -27,7 +27,7 @@ LOCK_DIR = ENGINE_ROOT / "locks"
 LAUNCH_AGENT_DIR = Path.home() / "Library" / "LaunchAgents"
 LAUNCH_LABEL_PREFIX = "com.agent-loop"
 SECRET_DENY_DIRS = [
-    Path.home() / "park-io" / "secrets",
+    Path.home() / ".config" / "loop" / "secrets",
     Path.home() / ".ssh",
     Path.home() / ".aws",
     Path.home() / ".config" / "gh",
@@ -57,12 +57,12 @@ SECRET_ENV_KEYWORDS = (
     "SECRET",
     "TOKEN",
 )
-DEFAULT_LINEAR_TEAM_KEY = os.environ.get("LOOP_LINEAR_TEAM_KEY", "WEN")
+DEFAULT_LINEAR_TEAM_KEY = os.environ.get("LOOP_LINEAR_TEAM_KEY", "ENG")
 DEFAULT_LINEAR_TEAM_NAME = os.environ.get("LOOP_LINEAR_TEAM_NAME", DEFAULT_LINEAR_TEAM_KEY)
 DEFAULT_LINEAR_API_KEY_FILE = Path(
     os.environ.get(
         "LOOP_LINEAR_API_KEY_FILE",
-        str(Path.home() / "park-io" / "secrets" / "linear-api-key"),
+        str(Path.home() / ".config" / "loop" / "linear-api-key"),
     )
 ).expanduser()
 LEARNING_EVENT_MAX_BYTES = 1024 * 1024
@@ -1004,7 +1004,7 @@ BLOCKED_SIGNALS: dict[str, list[str]] = {
     "credentials": ["secret", "credential", "api_key", "api-key", "apikey",
                     "private_key", "client_secret", "access_token", "access_key",
                     "bearer", "jwt", "password", "passphrase", ".env",
-                    "park-io/secrets", "keychain", "keyring"],
+                    ".ssh", "id_rsa", "keychain", "keyring"],
     "external_auth": ["oauth", "auth probe", "login flow", "sign in", "sso",
                       "refresh token", "auth token"],
     "launchd_or_cron": ["launchd", "launchctl", ".plist", "crontab", "cron",
@@ -1347,7 +1347,7 @@ def scan_changed_for_secrets(worktree_path: Path, changed: list[str]) -> list[st
     """Block the read-and-launder vector: a changed file must not contain known
     secret values or credential markers. Fails closed."""
     secret_values: set[str] = set()
-    secrets_dir = Path.home() / "park-io" / "secrets"
+    secrets_dir = Path.home() / ".config" / "loop" / "secrets"
     if secrets_dir.exists():
         for sf in secrets_dir.iterdir():
             try:
@@ -1711,10 +1711,9 @@ def wrap_sandbox_command(cmd: list[str], profile: str) -> list[str]:
 
 
 def wrap_agent_command(cmd: list[str]) -> list[str]:
-    # Codex applies its own workspace sandbox when invoked with
-    # `--sandbox workspace-write`. Wrapping Codex in sandbox-exec causes nested
-    # sandbox creation to fail on macOS, while verification commands still use
-    # the stricter OS sandbox below.
+    # Agent CLIs apply their own workspace/permission model. Wrapping them in
+    # sandbox-exec can break nested tool execution on macOS, while verification
+    # commands still use the stricter OS sandbox below.
     return cmd
 
 
@@ -1754,18 +1753,33 @@ def run_verification_command(command: str, cwd: Path, log_path: Path, timeout_se
         raise RuntimeError(f"verification command failed ({result.returncode}): {command}")
 
 
-def codex_exec(
-    prompt: str,
-    cwd: Path,
-    output_path: Path,
-    extra_writable: Path,
-    agent_cfg: dict | None = None,
-) -> None:
-    prompt_path = output_path.with_suffix(".prompt.md")
-    prompt_path.write_text(prompt)
+def agent_provider(agent_cfg: dict | None = None) -> str:
+    agent_cfg = agent_cfg or {}
+    provider = str(agent_cfg.get("provider") or agent_cfg.get("type") or "codex").strip().lower()
+    aliases = {
+        "codex-cli": "codex",
+        "openai": "codex",
+        "claude-code": "claude",
+        "anthropic": "claude",
+    }
+    return aliases.get(provider, provider)
+
+
+def resolve_agent_binary(provider: str, agent_cfg: dict | None = None) -> str:
+    agent_cfg = agent_cfg or {}
+    command = str(agent_cfg.get("command") or provider).strip()
+    if provider == "codex":
+        return command
+    resolved = command if "/" in command else shutil.which(command)
+    if provider == "claude" and not resolved:
+        raise RuntimeError("missing_claude_cli: Claude CLI was not found on PATH")
+    return resolved or command
+
+
+def codex_command(cwd: Path, output_path: Path, extra_writable: Path, agent_cfg: dict | None = None) -> list[str]:
     agent_cfg = agent_cfg or {}
     cmd = [
-        "codex",
+        resolve_agent_binary("codex", agent_cfg),
         "exec",
         "--cd",
         str(cwd),
@@ -1789,11 +1803,82 @@ def codex_exec(
         str(output_path),
         "-",
     ])
+    return cmd
+
+
+def claude_command(cwd: Path, extra_writable: Path, agent_cfg: dict | None = None) -> list[str]:
+    agent_cfg = agent_cfg or {}
+    # Parity with codex_command's --sandbox clamp: never let registry config open
+    # the cage. Claude Code's headless sandbox confines reads/writes/Bash to cwd +
+    # --add-dir under the default modes, but `bypassPermissions` (or any unknown
+    # mode) removes that confinement entirely. An unattended loop must not allow it.
+    safe_permission_modes = ("default", "acceptEdits", "plan")
+    permission_mode = str(agent_cfg.get("permission_mode") or "acceptEdits")
+    if permission_mode not in safe_permission_modes:
+        permission_mode = "acceptEdits"
+    cmd = [
+        resolve_agent_binary("claude", agent_cfg),
+        "--print",
+        "--input-format",
+        "text",
+        "--output-format",
+        str(agent_cfg.get("output_format") or "text"),
+        "--no-session-persistence",
+        "--safe-mode",
+        "--permission-mode",
+        permission_mode,
+        "--add-dir",
+        str(extra_writable),
+    ]
+    if agent_cfg.get("model"):
+        cmd.extend(["--model", agent_cfg["model"]])
+    effort = agent_cfg.get("effort") or agent_cfg.get("reasoning_effort")
+    if effort:
+        cmd.extend(["--effort", str(effort)])
+    if agent_cfg.get("max_budget_usd") is not None:
+        cmd.extend(["--max-budget-usd", str(agent_cfg["max_budget_usd"])])
+    if agent_cfg.get("allowed_tools"):
+        allowed = agent_cfg["allowed_tools"]
+        if isinstance(allowed, str):
+            cmd.extend(["--allowedTools", allowed])
+        else:
+            cmd.extend(["--allowedTools", ",".join(str(item) for item in allowed)])
+    if agent_cfg.get("disallowed_tools"):
+        disallowed = agent_cfg["disallowed_tools"]
+        if isinstance(disallowed, str):
+            cmd.extend(["--disallowedTools", disallowed])
+        else:
+            cmd.extend(["--disallowedTools", ",".join(str(item) for item in disallowed)])
+    if agent_cfg.get("settings"):
+        cmd.extend(["--settings", str(agent_cfg["settings"])])
+    if agent_cfg.get("append_system_prompt"):
+        cmd.extend(["--append-system-prompt", str(agent_cfg["append_system_prompt"])])
+    return cmd
+
+
+def agent_exec(
+    prompt: str,
+    cwd: Path,
+    output_path: Path,
+    extra_writable: Path,
+    agent_cfg: dict | None = None,
+) -> None:
+    prompt_path = output_path.with_suffix(".prompt.md")
+    prompt_path.write_text(prompt)
+    agent_cfg = agent_cfg or {}
+    provider = agent_provider(agent_cfg)
+    if provider == "codex":
+        cmd = codex_command(cwd, output_path, extra_writable, agent_cfg)
+    elif provider == "claude":
+        cmd = claude_command(cwd, extra_writable, agent_cfg)
+    else:
+        raise RuntimeError(f"unsupported_agent_provider: {provider}")
     timeout_seconds = agent_cfg.get("timeout_seconds")
     try:
         result = subprocess.run(
             wrap_agent_command(cmd),
             input=prompt,
+            cwd=cwd,
             text=True,
             capture_output=True,
             timeout=timeout_seconds,
@@ -1804,11 +1889,25 @@ def codex_exec(
         output_path.with_suffix(".stderr.log").write_text(
             (exc.stderr or "") + f"\nTIMEOUT after {timeout_seconds} seconds\n"
         )
-        raise RuntimeError(f"codex exec timed out after {timeout_seconds} seconds")
+        raise RuntimeError(f"{provider} exec timed out after {timeout_seconds} seconds")
     output_path.with_suffix(".stdout.log").write_text(result.stdout)
     output_path.with_suffix(".stderr.log").write_text(result.stderr)
+    if provider == "claude":
+        output_path.write_text(result.stdout)
     if result.returncode != 0:
-        raise RuntimeError(f"codex exec failed ({result.returncode}); see {output_path.with_suffix('.stderr.log')}")
+        raise RuntimeError(f"{provider} exec failed ({result.returncode}); see {output_path.with_suffix('.stderr.log')}")
+
+
+def codex_exec(
+    prompt: str,
+    cwd: Path,
+    output_path: Path,
+    extra_writable: Path,
+    agent_cfg: dict | None = None,
+) -> None:
+    cfg = dict(agent_cfg or {})
+    cfg["provider"] = "codex"
+    agent_exec(prompt, cwd, output_path, extra_writable, cfg)
 
 
 def ensure_project_clean(repo_path: Path) -> None:
@@ -1834,7 +1933,7 @@ def planner(project: str, cfg: dict, run_dir: Path, policy: dict | None = None, 
     values = base_prompt_values(project, cfg, run_dir)
     values["LOOP_CONTROL_POLICY"] = policy_prompt_snapshot(policy, supervised)
     prompt = render_template("planner.md", values)
-    codex_exec(
+    agent_exec(
         prompt,
         Path(cfg["repo_path"]),
         run_dir / "planner-last-message.md",
@@ -1859,7 +1958,7 @@ def worker(project: str, cfg: dict, task_dir: Path, issue_path: Path, branch_suf
         "ISSUE_PATH": str(issue_path),
     })
     prompt = render_template("worker.md", values)
-    codex_exec(
+    agent_exec(
         prompt,
         worktree_path,
         task_dir / "worker-last-message.md",
@@ -1912,7 +2011,7 @@ def reviewer(project: str, cfg: dict, task_dir: Path, issue_path: Path, worktree
     # before the reviewer runs — the verdict must come from the reviewer agent.
     report = task_dir / "reviewer-report.md"
     report.unlink(missing_ok=True)
-    codex_exec(
+    agent_exec(
         prompt,
         worktree_path,
         task_dir / "reviewer-last-message.md",
@@ -2306,11 +2405,11 @@ def write_cycle_summary_markdown(path: Path, summary: dict) -> None:
         lines.append("- Brief: -")
     questions = strategy.get("questions") or []
     if questions:
-        lines.append("- Questions for Wendy:")
+        lines.append("- Questions for the operator:")
         for question in questions:
             lines.append(f"  - {display_text(question)}")
     else:
-        lines.append("- Questions for Wendy: -")
+        lines.append("- Questions for the operator: -")
     lines.extend([
         "",
         "## Completed Work",
@@ -2791,7 +2890,7 @@ def render_digest_markdown(payload: dict) -> str:
         if strategy.get("brief_excerpt"):
             lines.append(f"  - Strategy: {display_text(strategy.get('brief_excerpt'))}")
         if strategy.get("questions"):
-            lines.append("  - Questions for Wendy:")
+            lines.append("  - Questions for the operator:")
             for question in strategy.get("questions", [])[:5]:
                 lines.append(f"    - {display_text(question)}")
         control_gate = run_entry.get("control_gate") or {}

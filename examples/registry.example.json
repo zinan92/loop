@@ -34,9 +34,9 @@
         ]
       },
       "agents": {
-        "planner": {"model": "gpt-5.5", "reasoning_effort": "high", "timeout_seconds": 600},
-        "worker": {"model": "gpt-5.5", "reasoning_effort": "high", "timeout_seconds": 900},
-        "reviewer": {"model": "gpt-5.5", "reasoning_effort": "high", "timeout_seconds": 600}
+        "planner": {"provider": "codex", "model": "gpt-5.5", "reasoning_effort": "high", "timeout_seconds": 600},
+        "worker": {"provider": "claude", "model": "sonnet", "timeout_seconds": 900},
+        "reviewer": {"provider": "codex", "model": "gpt-5.5", "reasoning_effort": "high", "timeout_seconds": 600}
       }
     }
   }

@@ -46,13 +46,13 @@ Rank by value first:
   make the approval need explicit. Do not silently replace it with low-risk
   busywork.
 - Low-risk work may run only after higher-value gated work has been surfaced to
-  Wendy in `candidates.json`.
+  the operator in `candidates.json`.
 
 Use loop memory to avoid repeating blocked candidates and to prefer task types
 that previously merged cleanly. Memory is not permission to bypass the current
 project contract or safety gates.
 
-Use human-side feedback as Wendy's taste and prioritization signal:
+Use human-side feedback as the operator's taste and prioritization signal:
 - Cross-project Daily PM Review explains why this project is active or held
   today and what success should mean.
 - Answered Orchestrator questions override your prior uncertainty. Do not ask
@@ -93,8 +93,8 @@ Product-work universe:
 
 Elicitation behavior:
 - If the best product direction is not obvious, do not pretend certainty. Write
-  {{RUN_DIR}}/elicitation-questions.md with 3 to 5 concise questions for Wendy.
-- The questions should help Wendy choose among broad product directions, not
+  {{RUN_DIR}}/elicitation-questions.md with 3 to 5 concise questions for the operator.
+- The questions should help the operator choose among broad product directions, not
   micromanage implementation details.
 - Also write {{RUN_DIR}}/strategy-brief.md summarizing the strongest product
   directions you considered and which categories they belong to.

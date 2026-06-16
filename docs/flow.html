@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>loop — how it works / 流程图</title>
+<style>
+  :root{
+    --bg:#0d1117;--panel:#161b22;--panel2:#1c2430;--line:#30363d;
+    --ink:#e6edf3;--mut:#8b949e;--dim:#6e7681;
+    --amber:#d29922;--blue:#58a6ff;--green:#3fb950;--red:#e06c4f;--purple:#bc8cff;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:radial-gradient(1100px 560px at 50% -12%,#16203055,transparent),var(--bg);
+    color:var(--ink);font:14px/1.6 -apple-system,BlinkMacSystemFont,"PingFang SC","Segoe UI",sans-serif;
+    padding:34px 18px 64px}
+  .wrap{max-width:1000px;margin:0 auto}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  h1{font-size:26px;letter-spacing:.5px;margin-bottom:4px}
+  h1 .b{color:var(--blue)}
+  .sub{color:var(--mut);font-size:13px;margin-bottom:6px}
+  .links{font-size:12.5px;color:var(--dim);margin-bottom:26px}
+  .links a{color:var(--blue);text-decoration:none}
+  h2{font-size:12px;letter-spacing:2px;text-transform:uppercase;color:var(--blue);
+    margin:30px 0 14px;display:flex;gap:10px;align-items:center}
+  h2::after{content:"";flex:1;height:1px;background:var(--line)}
+  .cn{color:var(--mut);font-weight:400;font-size:11.5px;letter-spacing:0;text-transform:none}
+
+  /* triggers row */
+  .row{display:grid;gap:12px}
+  .row.three{grid-template-columns:repeat(3,1fr)}
+  .row.two{grid-template-columns:1fr 1fr}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+  .card .t{font-weight:700;font-size:13.5px;margin-bottom:4px}
+  .card .d{color:var(--mut);font-size:12px}
+  .card .cmd{margin-top:8px;font-size:11.5px;color:var(--green);background:#0a0e14;
+    border:1px solid var(--line);border-radius:7px;padding:5px 8px;display:inline-block}
+
+  /* pipeline */
+  .pipe{position:relative;margin-top:6px}
+  .stage{display:grid;grid-template-columns:34px 1fr;gap:14px;position:relative;padding-bottom:14px}
+  .stage::before{content:"";position:absolute;left:16px;top:30px;bottom:-2px;width:2px;background:var(--line)}
+  .stage:last-child::before{display:none}
+  .num{width:34px;height:34px;border-radius:50%;background:var(--panel2);border:1px solid var(--line);
+    display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;color:var(--blue);z-index:1}
+  .stage.act .num{border-color:var(--green);color:var(--green)}
+  .stage.gate .num{border-color:var(--amber);color:var(--amber)}
+  .stage.auto .num{border-color:var(--purple);color:var(--purple)}
+  .body{background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:11px 14px}
+  .body .h{font-weight:700;font-size:13.5px}
+  .body .h .tag{font-size:10px;font-weight:600;letter-spacing:.5px;padding:1px 7px;border-radius:20px;margin-left:8px;vertical-align:1px}
+  .tag.run{background:#3fb95022;color:var(--green);border:1px solid #3fb95055}
+  .tag.chk{background:#d2992222;color:var(--amber);border:1px solid #d2992255}
+  .tag.aut{background:#bc8cff22;color:var(--purple);border:1px solid #bc8cff55}
+  .body .x{color:var(--mut);font-size:12px;margin-top:3px}
+  .chips{margin-top:8px;display:flex;flex-wrap:wrap;gap:6px}
+  .chip{font-size:10.5px;padding:2px 8px;border-radius:6px;background:#0a0e14;border:1px solid var(--line);color:var(--dim)}
+  .chip.g{color:var(--amber);border-color:#d2992244}
+  .chip b{color:var(--mut)}
+
+  .note{background:linear-gradient(150deg,#d2992212,transparent);border:1px solid #d2992255;
+    border-radius:11px;padding:12px 15px;font-size:12.5px;color:var(--mut);margin-top:6px}
+  .note b{color:var(--amber)}
+
+  /* risk tiers */
+  .tier{border-radius:11px;padding:12px 15px;border:1px solid var(--line)}
+  .tier .t{font-weight:700;font-size:13px;margin-bottom:4px}
+  .tier .d{font-size:11.5px;color:var(--mut)}
+  .tier.lo{background:linear-gradient(150deg,#3fb95014,transparent);border-color:#3fb95055}
+  .tier.lo .t{color:var(--green)}
+  .tier.me{background:linear-gradient(150deg,#d2992214,transparent);border-color:#d2992255}
+  .tier.me .t{color:var(--amber)}
+  .tier.hi{background:linear-gradient(150deg,#e06c4f14,transparent);border-color:#e06c4f55}
+  .tier.hi .t{color:var(--red)}
+
+  .foot{margin-top:34px;color:var(--dim);font-size:11.5px;text-align:center;border-top:1px solid var(--line);padding-top:16px}
+  @media(max-width:680px){.row.three,.row.two{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1><span class="b">loop</span> — how it works</h1>
+  <p class="sub">A value-ranked, auditable, pausable coding-agent loop. <span class="mono">Agents: Codex or Claude Code (per role) · macOS only.</span></p>
+  <p class="sub" style="color:#8b949e">把一次性的 coding-agent prompt 变成「按价值排序、可审计、可暂停」的执行闭环。这页讲清：什么时候触发、触发后它自己干什么。</p>
+  <p class="links">📄 <a href="../README.md">README</a> &nbsp;·&nbsp; 🤖 <a href="../AGENTS.md">AGENTS.md</a> &nbsp;·&nbsp; ⚙️ <a href="../examples/">examples</a></p>
+
+  <!-- TRIGGERS -->
+  <h2>1 · Triggers <span class="cn">什么时候开始一轮</span></h2>
+  <div class="row three">
+    <div class="card">
+      <div class="t">▶ run-now</div>
+      <div class="d">One cycle, right now. 立刻跑一轮（最常用于试跑 / 白天手动推进）。</div>
+      <div class="cmd mono">loop run-now</div>
+    </div>
+    <div class="card">
+      <div class="t">⏱ hourly tick</div>
+      <div class="d">After <span class="mono">loop start</span>: one cycle per hour, forever, until <span class="mono">loop stop</span>. 每小时一轮，跑到喊停。</div>
+      <div class="cmd mono">loop start</div>
+    </div>
+    <div class="card">
+      <div class="t">⏸ pause / stop</div>
+      <div class="d">Halt anytime. User-space daemon — not launchd/cron, doesn't survive reboot. 随时暂停/停止。</div>
+      <div class="cmd mono">loop pause · loop stop</div>
+    </div>
+  </div>
+
+  <!-- ONE CYCLE -->
+  <h2>2 · One cycle, step by step <span class="cn">触发后它自己干这些</span></h2>
+  <div class="pipe">
+
+    <div class="stage act">
+      <div class="num">1</div>
+      <div class="body">
+        <div class="h">planner <span class="tag run">agent</span></div>
+        <div class="x">Reads your <b style="color:#8b949e">daily-focus</b> + PM review + last scorecard + bounded memory, then proposes value-scored candidates.<br><span style="color:#6e7681">读你写的每日 focus 和反馈 → 产出按价值打分的候选 → <span class="mono">candidates.json</span> + issue 文件</span></div>
+      </div>
+    </div>
+
+    <div class="stage gate">
+      <div class="num">2</div>
+      <div class="body">
+        <div class="h">gates <span class="tag chk">checks</span></div>
+        <div class="x">Candidates must pass every gate, or the cycle stops and waits for you. 过不了闸 → <span class="mono">waiting_for_human</span> 或 no-op。</div>
+        <div class="chips">
+          <span class="chip g">value line · <b>≥ threshold</b></span>
+          <span class="chip g">do-nothing · <b>no forced work</b></span>
+          <span class="chip g">blocked category</span>
+          <span class="chip g">risk envelope</span>
+          <span class="chip g">higher-value blocker</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="stage act">
+      <div class="num">3</div>
+      <div class="body">
+        <div class="h">worker <span class="tag run">Codex / Claude</span></div>
+        <div class="x">Runs on the role's provider (<b style="color:#8b949e">Codex or Claude Code</b>); creates the GitHub issue, then edits code in an isolated worktree — confined to that worktree, only the issue's <span class="mono">Allowed Files</span>.<br><span style="color:#6e7681">按角色用 Codex 或 Claude;先建 issue,再在隔离 worktree 里改代码,被关在 worktree 内、只能动白名单文件</span></div>
+      </div>
+    </div>
+
+    <div class="stage gate">
+      <div class="num">4</div>
+      <div class="body">
+        <div class="h">verify + scan <span class="tag chk">fail-closed</span></div>
+        <div class="x">Trusted verification commands run under <span class="mono">sandbox-exec</span> (network denied, secret dirs denied), then an allowlist + secret-leak scan. 验证沙箱化 + 防泄露扫描。</div>
+        <div class="chips">
+          <span class="chip g">sandbox-exec</span>
+          <span class="chip g">network denied</span>
+          <span class="chip g">secret-leak scan</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="stage act">
+      <div class="num">5</div>
+      <div class="body">
+        <div class="h">reviewer <span class="tag run">agent</span></div>
+        <div class="x">Must emit <span class="mono">REVIEW_STATUS: pass | fail | needs_human</span>. Only <span style="color:#3fb950">pass</span> proceeds.<br><span style="color:#6e7681">独立 reviewer 把关，只有 pass 才往下走</span></div>
+      </div>
+    </div>
+
+    <div class="stage auto">
+      <div class="num">6</div>
+      <div class="body">
+        <div class="h">PR + merge <span class="tag aut">automatic</span></div>
+        <div class="x">On pass, the engine opens a PR and runs <span class="mono">gh pr merge --delete-branch</span> into the pilot branch — <b style="color:#bc8cff">no human gate here</b>.<br><span style="color:#6e7681">reviewer 通过 = 自动开 PR 并合并，中间没有人工复核</span></div>
+      </div>
+    </div>
+
+    <div class="stage auto">
+      <div class="num">7</div>
+      <div class="body">
+        <div class="h">summary + memory <span class="tag aut">automatic</span></div>
+        <div class="x">Writes the cycle-summary, distills bounded memory, optional Linear milestone — all automatic. The full digest report (<span class="mono">loop-engine/reports/&lt;project&gt;/latest.md</span>) is refreshed separately by <span class="mono">loop digest</span> (see Evening).<br><span style="color:#6e7681">自动:写 cycle-summary + 沉淀 memory +（可选）Linear。完整 digest 报告由 loop digest 单独刷新(见晚上)</span></div>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="note"><b>Default cap / 默认限流：</b> only the top-ranked auto-runnable task runs per cycle (<span class="mono">max_tasks_per_cycle = 1</span>) to avoid same-cycle PR conflicts; the rest go to <span class="mono">deferred-candidates.md</span>. 一轮只做最高价值的一件事。</div>
+
+  <!-- DAILY RHYTHM -->
+  <h2>3 · Daily rhythm <span class="cn">每日节奏：早晨设方向 · 晚上看复盘</span></h2>
+  <div class="row two">
+    <div class="card" style="border-color:#d2992255">
+      <div class="t">🌅 Morning — set focus, then trigger</div>
+      <div class="d" style="margin-top:6px">
+        ① Write <span class="mono">.loop/daily-focus/latest.md</span> — today's value ranking + policy (<span class="mono">value_threshold</span>, <span class="mono">recommended_cycles</span>, <span class="mono">stop_condition</span>, any preapproved envelope).<br>
+        ② <span class="mono">loop start</span> / <span class="mono">resume</span> — next cycle's planner reads it as scope.<br>
+        <span style="color:#6e7681">早上写当天的 focus（loop 不自动生成，它读你写的 Markdown），再 start。</span>
+      </div>
+    </div>
+    <div class="card" style="border-color:#58a6ff55">
+      <div class="t">🌙 Evening — recap, then score</div>
+      <div class="d" style="margin-top:6px">
+        ① <span class="mono">loop pause</span><br>
+        ② <span class="mono">loop digest</span> → the <b style="color:#58a6ff">recap</b>: what merged, PRs, before/after, approval queue → <span class="mono">loop-engine/reports/&lt;project&gt;/latest.md</span>.<br>
+        ③ Write <span class="mono">loop-engine/evening-scorecards/latest.md</span> — tomorrow's planner reads it.<br>
+        <span style="color:#6e7681">晚上 pause → digest 出复盘 → 写 scorecard 给明天。</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- RISK -->
+  <h2>4 · What runs automatically vs. waits <span class="cn">什么自动跑、什么必须等人</span></h2>
+  <div class="row three">
+    <div class="tier lo">
+      <div class="t">Low-risk → auto</div>
+      <div class="d">tests, docs, CLI/digest wording, deterministic parsing, small observability/refactors. Runs unattended after gates pass. 过闸后自动跑。</div>
+    </div>
+    <div class="tier me">
+      <div class="t">Medium-risk → supervised</div>
+      <div class="d">visible UI, small product-surface or schema changes. Needs a preapproved envelope + <span class="mono">run-now --supervised</span> first. 要预批 envelope + 监督首跑。</div>
+    </div>
+    <div class="tier hi">
+      <div class="t">High-risk → never auto</div>
+      <div class="d">credentials, auth, launchd/cron, publishing/deploy, destructive ops, money/trading, broad rewrites. Always manual. 永远人工。</div>
+    </div>
+  </div>
+
+  <div class="foot">
+    loop · value-first, fail-closed, pausable &nbsp;·&nbsp; every claim here maps to <span class="mono">loop-engine/bin/loopctl.py</span><br>
+    本图为人而作（visual for humans）· 机读操作契约见 <span class="mono">AGENTS.md</span>
+  </div>
+
+</div>
+</body>
+</html>

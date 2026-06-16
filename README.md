@@ -2,275 +2,268 @@
 
 # loop
 
-**把一次性的 coding-agent prompt，变成跨本地 Git 项目的「按价值排序、可审计、可暂停」的自进化执行闭环**
+**把一次性的 coding-agent prompt，变成跨本地 Git 项目的「按价值排序、可审计、可暂停」的持续改进闭环**
+
+**Turn a one-off coding-agent prompt into a value-ranked, auditable, pausable improvement loop for your local Git projects.**
 
 [![Python](https://img.shields.io/badge/python-3.11+-blue.svg)](https://python.org)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-70%20passing-brightgreen.svg)](loop-engine/tests)
+[![Tests](https://img.shields.io/badge/tests-76%20passing-brightgreen.svg)](loop-engine/tests)
+[![Platform](https://img.shields.io/badge/platform-macOS-lightgrey.svg)](#compatibility--兼容性)
+[![Coding agent](https://img.shields.io/badge/coding%20agent-Codex%20%2B%20Claude-black.svg)](#compatibility--兼容性)
+
+[📊 Visual flow / 可视化流程图](docs/flow.html) · [🤖 For AI agents / 给 AI agent](AGENTS.md)
 
 </div>
 
 ---
 
-`loop` turns a one-off coding-agent prompt into a value-ranked, auditable,
-pausable execution loop across local Git projects.
+```
+in   clean local Git repo + GitHub origin + .loop/contract.yaml + (optional) daily-focus
+out  GitHub issues/PRs + run logs + human digest + bounded memory + (optional) Linear milestones
 
-It is a control plane for:
-
-- daily product focus
-- planner candidate generation
-- low-risk worker execution
-- supervised medium-risk execution
-- reviewer validation
-- GitHub issue/PR bookkeeping
-- optional Linear milestone/status sync
-- human digest and approval queues
-
-The project is intentionally conservative: it should create product value
-without turning into autonomous busywork.
-
-## What It Does
-
-```text
-input  clean local Git repo + GitHub origin + loop contract + optional daily focus
-output GitHub issues/PRs + run logs + digest + bounded memory + optional Linear milestone
-
-gate   missing init/auth/remote        -> LOOP_BLOCKED
-gate   no candidate above value line   -> no-op, no worker run
-gate   unsafe task or verification     -> waiting_for_human
-gate   higher-value approval item      -> pause before lower-value work
+fail  not initialized / no gh auth / no GitHub remote  → LOOP_BLOCKED, no mutation
+fail  no candidate clears the value line               → no-op cycle, no worker runs
+fail  unsafe task or untrusted verification            → waiting_for_human, gated
+fail  a higher-value item needs approval               → pause before doing lower-value work
 ```
 
-Core adapters:
+> **中文一句话：** `loop` 是一个**控制平面**——它驱动一个 coding agent（Codex 或 Claude Code，可按角色配）在你的项目上**自己找活、按价值排序、跑通验证、开 PR、合并、写复盘**，每一步都有闸门和审计，随时可暂停。它的设计偏保守：**宁可这一轮什么都不做，也不硬找低价值的活**。
+>
+> **In one line:** `loop` is a **control plane** that drives a coding agent (Codex or Claude Code, configurable per role) to find work on your repo, rank it by value, pass verification, open and merge a PR, and write a recap — every step gated and auditable, pausable at any time. It is deliberately conservative: a cycle may correctly do **nothing** rather than invent low-value busywork.
 
-- Python 3.11+ standard library
-- Git
-- GitHub CLI (`gh`)
-- Codex CLI
-- Linear GraphQL API, optional
-- macOS `sandbox-exec` for verification isolation
+---
 
-## 示例输出
+## ⚠️ Before you run it — Safety & Permissions / 运行前必读
 
-`loop status` —— 回来后一眼看清当前状态：
+> **这一节是给"要把 loop 跑起来的人"和"替人操作 loop 的 agent"看的。先懂这 5 条，再 `loop start`。**
+> Read these 5 facts before `loop start`. An agent operating `loop` on a human's behalf **must relay them first**.
 
-```text
-STATE paused
-LAST_RUN <project>-20260615-155853
-NEXT_CYCLE -
-WAITING_FOR_HUMAN 0
-GITHUB <owner>/<project>
-LINEAR_PROJECT <project>
-DIGEST loop-engine/reports/<project>/latest.md
-SCHEDULER installed=False loaded=False
-```
+1. **引擎进程以你的完整用户权限运行 / The engine runs as your full OS user.**
+   `loopctl.py` reads your real secret files (default `~/.config/loop/secrets`, plus `~/.ssh`, `~/.aws`, …) — by design, so it can scan the worker's diff and **block any change that leaks a known secret value**. It needs to know your secrets in order to catch leaks.
 
-一轮 cycle 跑完（价值门 + 验证门都通过 → 合并 PR）：
+2. **每个 agent 都被关在 worktree 里;验证命令再额外走 sandbox-exec / Each agent is confined to the worktree; verification adds sandbox-exec.**
+   Verification commands run under `sandbox-exec` with **network denied** and secret dirs denied. The planner/worker/reviewer get a **scrubbed environment** (no secret env vars). File access is confined per provider: **Codex** limits *writes* to the worktree via `--sandbox workspace-write` (its reads stay broad); **Claude Code** limits reads, writes, **and** Bash to the worktree + run dir via its own headless sandbox — and the engine clamps Claude's permission mode (refuses `bypassPermissions`) so config can't disable it. Either way, the post-worker allowlist + secret-leak scan (provider-agnostic) catch anything out of scope before merge.
 
-```text
-RUN_COMPLETE <project>-20260615-105730 merged tasks=1 waiting_for_human=0
-```
+3. **reviewer 通过 = 自动合并，中间没有人工复核 / Reviewer pass = auto-merge, no human gate.**
+   When the reviewer returns `REVIEW_STATUS: pass`, the engine **autonomously** opens a PR and runs `gh pr merge --merge --delete-branch` into the pilot branch. (The GitHub issue itself is created earlier, at the start of the worker phase.) There is no separate human approval step between "reviewer pass" and "merged".
 
-价值门拦截（没有候选过价值线 → 不硬找事做）：
+4. **`loop start` 是每小时一轮、跑到你喊停 / `loop start` runs hourly, forever.**
+   The cadence is fixed at one cycle per hour until `loop stop`. Each passing cycle can create **and merge** a PR. Use `loop pause` / `loop stop` to halt.
 
-```text
-RUN_COMPLETE <project>-20260615-163000 no_op tasks=0 waiting_for_human=0
-```
+5. **scheduler 是用户态守护进程，不是 launchd/cron / The scheduler is a user-space daemon.**
+   It does **not** install launchd, cron, or login autostart, and does **not** survive a reboot. `loop stop` (or `scheduler uninstall`) turns it off.
 
-`loop digest` 写出 `loop-engine/reports/<project>/latest.md`，回答"我离开时 loop 做了什么"：
-完成的工作 + PR + product before/after + 等待审批队列。
+---
 
-## PM Skills Are Optional
+## Compatibility / 兼容性
 
-`loop` does not import or depend on a PM skill package.
+> **诚实地说清楚现在能跑在哪、不能跑在哪。架构是 agent-无关的，但 v1 的实现是单 adapter。**
+> Honest scope. The architecture is agent-agnostic; the v1 implementation ships a single adapter.
 
-A PM workflow can be useful upstream because it can write durable planning
-artifacts such as:
+| 轴 / Axis | v1 现状 / Status | 说明 / Notes |
+|---|---|---|
+| **Coding agent** | **Codex CLI + Claude Code** | Set per role via a `provider` field (`codex` default, or `claude`); all roles route through one `agent_exec()` seam, and the candidate/issue/report I/O is file-based and provider-agnostic. **Codex** confines writes with its own `--sandbox workspace-write`; **Claude Code** is confined by its own headless sandbox (reads/writes/Bash limited to the worktree + `--add-dir`). The engine **clamps** Claude's permission mode (refuses `bypassPermissions`, asserted by unit tests) so config can't open that cage — but the runtime sandbox enforcement is Claude Code's own, not the engine's. |
+| **OS** | **macOS only** | Verification commands require `sandbox-exec` and **fail closed with a `RuntimeError`** without it — so a cycle cannot complete off-macOS. (Planner/worker/reviewer themselves don't use it, but no change can pass verification.) Linux/Windows would need an equivalent sandbox; not in v1. |
+| **Python** | **3.11+, standard library only** | No `pip install` for the engine itself. `pytest` is only needed to run the test suite. |
+| **Linear** | **Optional** | With no API key, `loop init` still succeeds and sets `linear_sync.enabled = false`. GitHub issues/PRs, run logs, digest, and approval queues all work without Linear. |
 
-- `<product>/.loop/daily-focus/latest.md`
-- `loop-engine/pm-reviews/latest.md`
-- `loop-engine/human-feedback/<project>/elicitation-answers.md`
-- `loop-engine/evening-scorecards/latest.md`
+> 一句话：**agent = Codex 或 Claude Code(按角色配),OS = 仅 macOS**。别的 OS 接缝留着但还没接上。以这张表为准,别信"任何 agent / 任何系统都能用"的笼统说法。
+> TL;DR: **agents = Codex or Claude Code (per role); OS = macOS only.** Other OSes aren't wired yet. Trust this table, not aspirational claims.
 
-Those files are plain Markdown inputs. You can generate them with a PM skill,
-write them manually, or omit them for a simpler run.
+---
 
-## Quick Start
+## Prerequisites / 前置依赖
+
+| 需要 / Requirement | 检查命令 / Verify |
+|---|---|
+| macOS with `sandbox-exec` | `which sandbox-exec` |
+| Python 3.11+ | `python3 --version` |
+| Git | `git --version` |
+| GitHub CLI, **authenticated** | `gh auth status` |
+| A coding-agent CLI — Codex (`codex exec`) and/or Claude Code (`claude --print`) | `codex --version` / `claude --version` |
+| (optional) Linear API key | set `LINEAR_API_KEY` or `LOOP_LINEAR_API_KEY_FILE` |
+
+If any of `gh` auth / GitHub remote / git repo is missing, `loop init` **fails closed** with a `LOOP_BLOCKED` reason (`missing_github_auth`, `missing_github_remote`, `not_git_repo`) and makes no changes.
+
+---
+
+## Quick start / 快速开始
 
 ```bash
+# 1) Clone + run the test suite (expect: 76 passed)
 git clone https://github.com/zinan92/loop.git
 cd loop
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest loop-engine/tests -q
 
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest loop-engine/tests -v
-```
-
-Install the local wrapper:
-
-```bash
+# 2) Put the wrapper on your PATH
 mkdir -p ~/.local/bin
 ln -sf "$(pwd)/loop-engine/bin/loop" ~/.local/bin/loop
-```
+export PATH="$HOME/.local/bin:$PATH"   # add to ~/.zshrc to persist
 
-Initialize a product repo:
+# 3) Pre-flight (all must pass before init)
+gh auth status && which sandbox-exec && { codex --version || claude --version; }
 
-```bash
-cd /path/to/product-repo
-loop init
+# 4) Initialize a target product repo (run from INSIDE it)
+cd /path/to/your-product-repo        # must be a clean git repo with a GitHub origin
+loop init                            # creates .loop/contract.yaml, a baseline tag,
+                                     # a loop/<project>-pilot branch, and registry/state
 loop status
-```
 
-Run one immediate cycle:
+# 5) (optional but recommended) write a daily focus — see examples/daily-focus.example.md
+#    <product-repo>/.loop/daily-focus/latest.md
 
-```bash
+# 6) Run a single cycle now
 loop run-now
+# → RUN_COMPLETE <project>-<stamp> merged tasks=1 waiting_for_human=0
+#   or, when nothing clears the value line:
+# → RUN_COMPLETE <project>-<stamp> no_op tasks=0 waiting_for_human=0
 ```
 
-Start the hourly loop:
+To run continuously: `loop start` (hourly, immediate first cycle) → `loop status` / `loop digest` → `loop pause` / `loop stop`.
 
-```bash
-loop start
-loop status
-loop digest
-loop stop
+---
+
+## How a cycle works / 一轮 cycle 做什么
+
+> 完整可视化见 **[docs/flow.html](docs/flow.html)**（给人看的图）。下面是文字版。
+> Full visual in **[docs/flow.html](docs/flow.html)**. Text version:
+
+```text
+trigger (run-now | hourly tick)
+  └─ planner    reads daily-focus + PM review + scorecard + memory → candidates.json (+ issue files), value-scored
+       └─ gates value line (≥ threshold) · do-nothing · blocked-category · risk envelope · higher-value-blocker
+            └─ worker    opens the GitHub issue, then edits code in an isolated worktree (only Allowed Files)
+                 └─ verify  trusted commands under sandbox-exec (network denied, secrets denied)
+                      └─ allowlist + secret-leak scan (fail-closed)
+                           └─ reviewer  must emit REVIEW_STATUS: pass | fail | needs_human
+                                └─ on pass: open PR + merge --delete-branch  (auto)
+                                     └─ Linear milestone (if enabled) → cycle-summary → digest → memory
 ```
 
-The default cadence is fixed: one cycle per hour, forever, until `loop stop`.
+By default **only the top-ranked auto-runnable task executes per cycle** (`max_tasks_per_cycle = 1`) to avoid same-cycle PR conflicts; the rest are written to `deferred-candidates.md`.
 
-## Project Requirements
+---
 
-For v1, a target project must be:
+## Daily rhythm: morning & evening / 每日节奏
 
-- a clean local Git repo
-- connected to an existing GitHub `origin`
-- usable with authenticated `gh`
-- initialized with `.loop/contract.yaml`
-- optionally connected to Linear through `LINEAR_API_KEY`
+> loop 不自动生成晨报/晚报——它**读你写的 Markdown**。这两个仪式就是写两个文件 + 跑两条命令。
+> `loop` does not generate these for you; it **reads Markdown you write**. Each ritual = one file + one command.
 
-The engine does not create GitHub repos automatically.
-If no Linear API key is configured, `loop init` still succeeds and disables
-Linear sync for that project; GitHub issues/PRs, local run logs, digests, and
-approval queues remain available.
+**🌅 Morning — set the focus, then trigger:**
+1. Write `<product-repo>/.loop/daily-focus/latest.md` (what to do today, value ranking, the policy fields the planner obeys — `value_threshold`, `recommended_cycles`, `stop_condition`, any `preapproved_medium_risk` envelope).
+2. `loop start` (or `loop resume`). The next cycle's planner reads that focus as its execution scope.
 
-## Configuration
+**🌙 Evening — recap, then score:**
+1. `loop pause`
+2. `loop digest` → refreshes `loop-engine/reports/<project>/latest.md` + `.html` — the **recap**: what merged, the PRs, before/after, and the approval queue.
+3. Write `loop-engine/evening-scorecards/latest.md` (did today's success criteria land?). Tomorrow's planner reads it.
 
-See:
+---
 
-- [examples/registry.example.json](examples/registry.example.json)
-- [examples/contract.example.yaml](examples/contract.example.yaml)
-- [examples/daily-focus.example.md](examples/daily-focus.example.md)
+## Risk model / 风险模型
 
-Useful environment variables:
+- **Low-risk** (tests, docs, CLI/digest wording, deterministic parsing, small observability/refactors) → may run unattended **after** value + verification gates pass.
+- **Medium-risk** (visible local UI, small product-surface behavior, payload/schema changes with tests, single-module refactors) → needs a **preapproved envelope** in daily-focus **and** `loop run-now --supervised` for the first execution.
+- **High-risk** (credentials/secrets/`.env`, external auth, launchd/cron, publishing/deploy, destructive ops, money/trading, broad rewrites, cross-project permission expansion) → **stays manual, never auto-executed.**
 
-| Variable | Purpose |
+## Value line / 价值线
+
+价值优先，不为了"能自动"就做没价值的活。Value-first: never spend agent time on low-value work just because it is easy to automate.
+
+- Planner emits candidates with a `value_score` (1–5); the engine processes them by **descending value**.
+- A candidate below `value_threshold` (default 3) → **no-op cycle**, the worker does not run.
+- A high-value item that needs approval **blocks** lower-value busywork until you decide.
+
+---
+
+## For AI agents / 给 AI agent
+
+> 大多数人会让**自己的 coding agent 读这个仓**，然后由 agent 来操作 loop、并向人解释它在干什么。
+> Most adopters point their **own** coding agent at this repo and let it operate `loop` and explain it to the human.
+> **The canonical agent-operation contract is [AGENTS.md](AGENTS.md)** — machine-readable commands, state fields, `waiting_for_human` reason codes + the human action each one needs, and the safety facts to relay. Read it first.
+
+Quick orientation for an operating agent:
+
+- **Read state, don't poll commands:** `loop status --json`, or read `loop-engine/state.json` directly. Key fields: `loop_job.state` (`active|paused|stopped`), `current_phase`, `waiting_for_human` (`{reason, issue_path}` or null), `runs[-1].status`.
+- **Recap is a file:** read `loop-engine/reports/<project>/latest.md`; don't call `loop digest` in a loop.
+- **Escalate, don't bypass:** anything in `waiting_for_human` needs a human decision (see the reason-code table in [AGENTS.md](AGENTS.md) and [Troubleshooting](#troubleshooting--排错)). Never edit prompts/reviewer output to force a pass.
+
+---
+
+## Configuration / 配置
+
+- [examples/registry.example.json](examples/registry.example.json) — per-project config (auto-written by `loop init`)
+- [examples/contract.example.yaml](examples/contract.example.yaml) — the `.loop/contract.yaml` schema
+- [examples/daily-focus.example.md](examples/daily-focus.example.md) — daily focus + preapproved envelope
+
+| Env var | Purpose |
 |---|---|
 | `LINEAR_API_KEY` | Linear API key for milestone/status sync |
-| `LOOP_LINEAR_API_KEY_FILE` | File fallback for the Linear API key |
-| `LOOP_LINEAR_TEAM_KEY` | Linear team key, for example `ENG` |
+| `LOOP_LINEAR_API_KEY_FILE` | File fallback (default `~/.config/loop/linear-api-key`) |
+| `LOOP_LINEAR_TEAM_KEY` | Linear team key, e.g. `ENG` |
 | `LOOP_LINEAR_TEAM_NAME` | Human-readable Linear team name |
 
-If Linear is disabled or unavailable, GitHub and local digest behavior can still
-be used, and Linear milestones/comments are skipped for that project.
+### Per-role agent provider / 按角色配 agent
 
-## Risk Model
+Each role can run on a different provider via the `agents` block in `registry.json`:
 
-Low-risk work may run unattended after value and verification gates pass:
-
-- tests
-- docs
-- CLI/status/digest wording
-- deterministic parsing or validation
-- small observability/reporting changes
-- small internal refactors with unchanged behavior
-
-Medium-risk work needs a daily preapproved envelope and should be supervised for
-the first execution:
-
-- visible local UI/widget changes
-- small product-surface behavior changes
-- payload/schema changes with tests
-- single-module non-trivial refactors
-
-High-risk work stays manual:
-
-- credentials, secrets, `.env`, auth tokens
-- external auth/login/OAuth probing
-- launchd, cron, or scheduler installation
-- publishing, deployment, or external posting
-- destructive file/data operations
-- trading, payment, broker, or money movement
-- broad architecture rewrites
-- cross-project permission expansion
-
-## Value Line
-
-The loop is value-first:
-
-- daily focus ranks work by expected product value
-- planner emits candidates with value scores
-- engine processes candidates by descending value score
-- by default, only the top auto-runnable task executes per cycle to avoid
-  same-cycle PR conflicts
-- a high-value approval item blocks lower-value busywork
-- no valuable candidate means no-op, not forced work
-
-This is the core rule: do not spend agent time on low-value tasks just because
-they are easy to automate.
-
-## Common Commands
-
-```bash
-loop init
-loop start
-loop status
-loop digest
-loop pause
-loop resume
-loop stop
-loop run-now
-loop run-now --supervised
+```json
+"agents": {
+  "planner":  {"provider": "codex",  "model": "gpt-5.5"},
+  "worker":   {"provider": "claude", "model": "sonnet"},
+  "reviewer": {"provider": "codex",  "model": "gpt-5.5"}
+}
 ```
 
-Explicit project form:
+`provider` defaults to `codex`, so existing registries keep working unchanged — in fact `loop init` writes the `agents` block **without** a `provider` key, and the `codex` default applies; add `provider` only to override a role to `claude`. For `claude`, the engine forces a safe permission mode (`bypassPermissions` is refused); a missing Claude CLI raises `missing_claude_cli` at cycle time. A common safe split is **Claude worker + Codex reviewer** (let Claude write, keep an independent reviewer gating).
 
-```bash
-python3 loop-engine/bin/loopctl.py status --project example-product
-python3 loop-engine/bin/loopctl.py run-now --project example-product
-python3 loop-engine/bin/loopctl.py scheduler status --project example-product
-```
+---
 
-## Runtime Artifacts
+## Troubleshooting / 排错
 
-Runtime artifacts are intentionally ignored by Git:
+When a cycle ends `needs_human`, look at two fields in `state.json`: **`waiting_for_human[].reason`** (per-item, what to act on) and **`runs[-1].control_gate.reason`** (why the loop paused).
 
-- `loop-engine/runs/`
-- `loop-engine/reports/`
-- `loop-engine/registry.json`
-- `loop-engine/state.json`
-- `loop-engine/pm-reviews/`
-- `loop-engine/human-feedback/`
-- `loop-engine/knowledge/`
-- `loop-engine/logs/`
-- `loop-engine/locks/`
-- `loop-engine/worktrees/`
+Per-item `waiting_for_human[].reason`:
 
-These files may contain local paths, private project strategy, Linear/GitHub
-metadata, and agent transcripts. Keep them out of public repos.
+| reason | 含义 / Meaning | 你要做的 / Action |
+|---|---|---|
+| `no_candidate_over_value_line` | nothing cleared the value threshold (when do-nothing is disabled) | lower `value_threshold` in daily-focus, or accept the no-op |
+| `blocked_category` | issue text matched a blocked keyword category | review the issue file under `runs/<id>/issues/`; reword or preapprove → `loop resume` |
+| `untrusted_verification` | a verification command isn't in the contract's trusted set | add it to `.loop/contract.yaml`, or run it manually → `loop resume` |
+| `medium_risk_requires_approval` / `medium_risk_requires_supervised_run` | a medium-risk item needs an envelope + supervised run | add a `preapproved_medium_risk` envelope to daily-focus → `loop run-now --supervised` |
+| `medium_envelope_violation` | the medium-risk task exceeded its envelope (files/commands) | tighten the issue or widen the envelope deliberately |
+| `high_risk_requires_approval` | a high-risk candidate was surfaced | stays manual — never auto-run |
+| `unsupported_risk` | the issue's risk field wasn't `low` or `medium` | fix the issue's `## Risk` |
+| `task_gated` | worker/reviewer/merge raised an exception | inspect `task-error.txt` + logs before retrying |
 
-## Repository Layout
+Control-plane `control_gate.reason` (why the loop paused — the gated items, if any, are in `waiting_for_human`): `higher_value_item_requires_approval` (decide the high-value item → `loop resume`), `no_auto_executable_candidates` / `all_candidates_gated` (every candidate needs approval), `stop_condition_met` / `recommended_cycles_exhausted` (intended end of today's budget).
+
+> A failed auto-merge is **not** a reason code: the cycle ends `needs_human` with the task marked `pass` but no merged PR — check the run log / `cycle-summary.json` and resolve the conflict on the pilot branch.
+
+---
+
+## Runtime artifacts / 运行产物
+
+Git-ignored by design — they hold local paths, private strategy, and agent transcripts. **Keep them out of public repos:** `loop-engine/runs/`, `reports/`, `registry.json`, `state.json`, `pm-reviews/`, `human-feedback/`, `knowledge/`, `logs/`, `locks/`, `worktrees/`.
+
+## Repository layout / 仓库结构
 
 ```text
 loop/
-├── README.md
-├── examples/
+├── README.md          ← you are here (bilingual, both audiences)
+├── AGENTS.md          ← agent-operation contract (markdown, for agents)
+├── docs/flow.html     ← visual flow (for humans)
+├── examples/          ← registry / contract / daily-focus templates
 ├── loop-engine/
-│   ├── bin/
-│   ├── prompts/
+│   ├── bin/           ← loopctl.py (engine) + loop (wrapper)
+│   ├── prompts/       ← planner / worker / reviewer prompts (agent-agnostic)
 │   ├── scheduler/
-│   └── tests/
+│   └── tests/         ← 76 passing
 └── .gitignore
 ```
 
 ## License
 
-[Apache-2.0](LICENSE). 你可以自由使用、修改、商用本项目，需保留版权与许可声明；
-许可证含明确的专利授权。
+[Apache-2.0](LICENSE). 自由使用、修改、商用，保留版权与许可声明；含明确专利授权。
+Free to use, modify, and commercialize; keep the notices; includes an explicit patent grant.

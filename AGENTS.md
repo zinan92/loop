@@ -1,0 +1,103 @@
+# AGENTS.md — operating `loop` as an AI agent
+
+> 这是给 **AI agent** 读的操作契约（人看的总览在 [README.md](README.md)，可视化在 [docs/flow.html](docs/flow.html)）。
+> You are likely a coding agent (Codex CLI or Claude Code — both supported, set per role) asked to operate `loop` for a human, or to explain it to them. This file is the contract: commands, state, gates, and what you must escalate. Everything here is verifiable in `loop-engine/bin/loopctl.py`.
+
+## What loop is (for you)
+
+`loop` is a control plane that drives a coding agent through a gated cycle on a local Git repo:
+`planner → value/risk gates → worker (isolated worktree) → verification (sandboxed) → reviewer → auto PR + merge → digest → memory`.
+You operate it through the `loop` CLI (or `python3 loop-engine/bin/loopctl.py <cmd> --project <id>`). You do **not** edit the engine, prompts, or reviewer output to influence outcomes.
+
+## First, relay these safety facts to your human
+
+Before the human starts `loop` (especially unattended), tell them, plainly:
+
+1. The engine process runs with their **full OS user permissions** and reads their real secret files (`~/.config/loop/secrets`, `~/.ssh`, `~/.aws`, …) to scan for leaks.
+2. File access is confined per provider: **Codex** confines *writes* to the worktree (`--sandbox workspace-write`; reads stay broad); **Claude Code** confines reads, writes, and Bash to the worktree + run dir via its own headless sandbox — the engine clamps Claude's permission mode (refuses `bypassPermissions`) so config can't disable it. All agents get a scrubbed env (no secret env vars). `sandbox-exec` additionally wraps verification commands (network denied).
+3. A reviewer `pass` triggers **autonomous `gh pr merge`** into the pilot branch — there is **no human gate** between review-pass and merge.
+4. `loop start` runs **hourly, forever**, until `loop stop`; each passing cycle may create and merge a PR.
+5. **macOS only** (Codex or Claude Code, set per role — see Compatibility in the README). Without `sandbox-exec`, verification fails closed and no cycle can complete.
+
+## How to operate it
+
+- **Read state, do not poll commands.** Run `loop status --json`, or read `loop-engine/state.json`. Key fields:
+  - `loop_job.state` → `active | paused | stopped`
+  - `current_phase`
+  - `waiting_for_human` → `null`, or `{ "reason": <code>, "issue_path": <path> }`
+  - `runs[-1].status` → `merged | no_op | needs_human | failed | ...`
+- **Read the recap from a file**, not by re-running digest: `loop-engine/reports/<project>/latest.md`.
+- **Trigger one cycle:** `loop run-now` (add `--supervised` only when a preapproved medium-risk envelope exists for the queued work).
+- **Lifecycle:** `loop pause` / `loop resume` / `loop stop`. `loop init` registers a new project (fails closed if prerequisites are missing).
+- **Escalate, never bypass.** Anything in `waiting_for_human` is a human decision. Surface it; do not reword issues or prompts to force a pass.
+
+## Reason codes → required human action
+
+**`waiting_for_human[].reason`** — one per gated item; this is what to act on:
+
+| reason | what happened | human action |
+|---|---|---|
+| `no_candidate_over_value_line` | nothing cleared `value_threshold` (when do-nothing is off) | lower the threshold, or accept the no-op |
+| `blocked_category` | issue matched a blocked keyword category | review `runs/<id>/issues/*.md`; reword or preapprove; `loop resume` |
+| `untrusted_verification` | a verification command isn't in the contract's trusted set | add to `.loop/contract.yaml` or verify manually; `loop resume` |
+| `medium_risk_requires_approval` / `medium_risk_requires_supervised_run` | medium-risk item needs an envelope + supervised run | add `preapproved_medium_risk` to daily-focus; `loop run-now --supervised` |
+| `medium_envelope_violation` | medium task exceeded its envelope | tighten the issue or widen the envelope deliberately |
+| `high_risk_requires_approval` | a high-risk candidate was surfaced | stays manual — never auto-run |
+| `unsupported_risk` | issue risk field wasn't `low` or `medium` | fix the issue's `## Risk` |
+| `task_gated` | worker/reviewer/merge raised an exception | inspect `task-error.txt` + logs before retrying |
+
+**`runs[-1].control_gate.reason`** — why the loop *paused* (the gated items themselves, if any, are in `waiting_for_human`): `higher_value_item_requires_approval` (decide the high-value item; `loop resume`), `no_auto_executable_candidates` / `all_candidates_gated` (every candidate needs approval), `stop_condition_met` / `recommended_cycles_exhausted` (intended end of the day's budget).
+
+> A failed auto-merge is **not** a reason code: the cycle ends `needs_human` with the task marked `pass` but no merged PR — inspect the run log / `cycle-summary.json` and resolve the conflict on the pilot branch.
+
+`LOOP_BLOCKED` reasons from `loop init` (no mutation occurs): `not_git_repo`, `missing_github_remote`, `missing_github_auth`, `missing_linear_team` (only when Linear is explicitly enabled).
+
+> Not an init reason: a `provider: claude` role whose Claude CLI is absent raises a `missing_claude_cli` **RuntimeError during cycle execution** (planner/worker/reviewer), not during `loop init`.
+
+## Machine-readable capability contract
+
+```yaml
+name: loop
+version: 1
+capability: Value-ranked, auditable, pausable coding-agent loop for local Git projects
+platform: macOS            # verification requires sandbox-exec; fails closed without it
+coding_agent: codex | claude   # per-role provider field (default codex); both route through one agent_exec() seam
+runtime: python>=3.11 (stdlib only)
+agents_config: 'registry.json -> agents.{planner|worker|reviewer}.{model: ..., [provider: codex|claude] optional, defaults to codex if absent}; claude permission_mode clamped (bypassPermissions refused); missing claude CLI -> missing_claude_cli RuntimeError at cycle time'
+
+commands:
+  init:     { in: "product repo cwd", out: ".loop/contract.yaml + registry + pilot branch", fail: "LOOP_BLOCKED <reason>" }
+  status:   { in: "project", out: "human text or JSON (--json)", reads: "state.json" }
+  run-now:  { in: "project [--supervised]", out: "one full cycle or no-op", fail: "waiting_for_human <reason>" }
+  start:    { in: "initialized project", out: "scheduler loaded, job active, first cycle immediate" }
+  pause:    { in: "project", out: "job paused, scheduler stays loaded" }
+  resume:   { in: "project", out: "job active, next tick fires" }
+  stop:     { in: "project", out: "job stopped, scheduler unloaded for that project" }
+  digest:   { in: "project [--json]", out: "reports/<project>/latest.md + .html" }
+
+gates:                      # in cycle order
+  - value_line: value_score >= value_threshold (default 3), else no-op
+  - do_nothing: after max_noop_cycles (default 2) consecutive no-ops, auto-pause
+  - risk_envelope: non-low/medium risk gated (unsupported_risk); medium needs --supervised + preapproved envelope; high never auto-runs
+  - blocked_category: keyword scan of issue intent over 7 categories -> gate to human
+  - untrusted_verification: issue verification commands must match the contract's trusted set
+  - higher_value_blocker: a waiting higher-value item blocks lower-value work
+  - max_tasks_per_cycle: only the top N (default 1) auto-run; the rest -> deferred-candidates.md
+  - worker_internal: verification under sandbox-exec (network denied) + Allowed-Files allowlist + secret-leak scan (all fail-closed)
+  - reviewer: REVIEW_STATUS must be exactly pass | fail | needs_human
+
+auto_execute: { low: true, medium: "supervised + envelope only", high: false }
+auto_merge: true            # reviewer pass → gh pr merge --merge --delete-branch (no human gate)
+
+sandbox_scope:
+  verification_commands: "sandbox-exec; network denied; secret dirs denied; scrubbed env"
+  codex_agent:  "codex --sandbox workspace-write confines writes to worktree; reads broad; scrubbed env"
+  claude_agent: "Claude Code headless sandbox confines reads/writes/Bash to worktree + --add-dir; permission_mode clamped (no bypassPermissions); scrubbed env"
+
+runtime_artifacts:          # git-ignored; never commit to a public repo
+  state: loop-engine/state.json
+  runs: loop-engine/runs/<run_id>/
+  digest: loop-engine/reports/<project>/latest.md
+  memory: loop-engine/knowledge/<project>/STATE.md
+  registry: loop-engine/registry.json
+```
