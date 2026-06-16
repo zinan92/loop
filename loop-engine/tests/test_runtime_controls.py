@@ -137,6 +137,7 @@ def test_codex_exec_uses_workspace_sandbox_and_scrubbed_env(monkeypatch, tmp_pat
     output_path = tmp_path / "agent-last-message.md"
     run_dir = tmp_path / "run-dir"
 
+    monkeypatch.setattr(loopctl.shutil, "which", lambda name: name)
     loopctl.codex_exec(
         "plan the work",
         tmp_path,
@@ -535,6 +536,9 @@ def test_bootstrap_writes_contract_and_registry(monkeypatch, tmp_path):
         "linear_control_issue_id": "issue-id",
     })
     monkeypatch.setattr(loopctl, "create_bootstrap_commit_and_branch", lambda repo_path, project_id: "loop/demo-app-pilot")
+    monkeypatch.setattr(loopctl, "github_repo_exists", lambda *a, **k: True)
+    _rw = loopctl.shutil.which
+    monkeypatch.setattr(loopctl.shutil, "which", lambda n, *a, **k: "/usr/bin/sandbox-exec" if n == "sandbox-exec" else _rw(n, *a, **k))
 
     project_id = loopctl.bootstrap_project(repo)
 
@@ -568,6 +572,9 @@ def test_bootstrap_without_linear_key_disables_linear_sync(monkeypatch, tmp_path
     monkeypatch.setattr(loopctl, "linear_api_key", lambda cfg: None)
     monkeypatch.setattr(loopctl, "linear_bootstrap_project", lambda project_id, project_name: pytest.fail("Linear bootstrap should not run without a key"))
     monkeypatch.setattr(loopctl, "create_bootstrap_commit_and_branch", lambda repo_path, project_id: "loop/no-linear-app-pilot")
+    monkeypatch.setattr(loopctl, "github_repo_exists", lambda *a, **k: True)
+    _rw = loopctl.shutil.which
+    monkeypatch.setattr(loopctl.shutil, "which", lambda n, *a, **k: "/usr/bin/sandbox-exec" if n == "sandbox-exec" else _rw(n, *a, **k))
 
     project_id = loopctl.bootstrap_project(repo)
 
@@ -790,3 +797,31 @@ def test_output_language_flows_into_prompt(tmp_path):
     rendered = loopctl.render_template("planner.md", vals)
     assert "Simplified Chinese" in rendered
     assert "{{OUTPUT_LANGUAGE}}" not in rendered
+
+
+def test_default_agents_codex_and_claude():
+    cx = loopctl.default_agents("codex")
+    assert cx["worker"]["provider"] == "codex" and cx["worker"]["model"] == "gpt-5.5"
+    cl = loopctl.default_agents("claude")
+    assert cl["worker"]["provider"] == "claude" and "model" not in cl["worker"]
+
+
+def test_resolve_agent_binary_missing_cli_named_error(monkeypatch):
+    monkeypatch.setattr(loopctl.shutil, "which", lambda name, *a, **k: None)
+    with pytest.raises(RuntimeError, match="missing_codex_cli"):
+        loopctl.resolve_agent_binary("codex", {})
+    with pytest.raises(RuntimeError, match="missing_claude_cli"):
+        loopctl.resolve_agent_binary("claude", {})
+
+
+def test_scheduler_status_payload_without_launchctl(monkeypatch, tmp_path):
+    (tmp_path / "state.json").write_text('{"projects": {}}')
+    monkeypatch.setattr(loopctl, "STATE_PATH", tmp_path / "state.json")
+    _rw = loopctl.shutil.which
+    monkeypatch.setattr(loopctl.shutil, "which", lambda n, *a, **k: None if n == "launchctl" else _rw(n, *a, **k))
+    payload = loopctl.scheduler_status_payload("demo")
+    assert payload["launchd_loaded"] is False
+
+
+def test_product_surface_drops_owner_session_heuristic():
+    assert loopctl.product_surface("mentions _codex_recent and --sessions", "Title") != "recent-session suggestions"

@@ -891,6 +891,20 @@ def registry_project_by_contract(contract_path: Path) -> str | None:
     return None
 
 
+def github_repo_exists(github_repo: str, cwd: Path) -> bool:
+    return run(["gh", "repo", "view", github_repo], cwd=cwd, check=False).returncode == 0
+
+
+def default_agents(provider: str | None) -> dict:
+    provider = agent_provider({"provider": provider})
+    def role(timeout: int) -> dict:
+        if provider == "claude":
+            # Omit model so the Claude CLI uses its own current default (no staleable id).
+            return {"provider": "claude", "reasoning_effort": "high", "timeout_seconds": timeout}
+        return {"provider": "codex", "model": "gpt-5.5", "reasoning_effort": "high", "timeout_seconds": timeout}
+    return {"planner": role(600), "worker": role(900), "reviewer": role(600)}
+
+
 def bootstrap_project(cwd: Path) -> str:
     repo_path = git_root(cwd)
     if repo_path is None:
@@ -909,7 +923,12 @@ def bootstrap_project(cwd: Path) -> str:
         )
     if not gh_auth_ok():
         raise LoopBlocked("missing_github_auth", "GitHub CLI auth is required before loop bootstrap")
+    if not shutil.which("sandbox-exec"):
+        raise LoopBlocked("unsupported_platform", "loop requires macOS (sandbox-exec) to run verified cycles")
+    if not github_repo_exists(github_repo, repo_path):
+        raise LoopBlocked("github_repo_not_found", f"GitHub repo {github_repo} not found or not accessible; create and push it before loop init")
 
+    bootstrap_provider = os.environ.get("LOOP_DEFAULT_PROVIDER")
     contract_path = repo_path / ".loop" / "contract.yaml"
     contract_project_id = parse_contract_value(contract_path, "project_id") if contract_path.exists() else None
     project_id = contract_project_id or slugify_project_id(repo_path.name)
@@ -952,11 +971,7 @@ def bootstrap_project(cwd: Path) -> str:
             "max_tasks_per_cycle": 1,
             "blocked_categories": list(BLOCKED_SIGNALS.keys()),
         },
-        "agents": {
-            "planner": {"model": "gpt-5.5", "reasoning_effort": "high", "timeout_seconds": 600},
-            "worker": {"model": "gpt-5.5", "reasoning_effort": "high", "timeout_seconds": 900},
-            "reviewer": {"model": "gpt-5.5", "reasoning_effort": "high", "timeout_seconds": 600},
-        },
+        "agents": default_agents(bootstrap_provider),
     }
     save_registry(registry)
     state = load_state()
@@ -1201,8 +1216,6 @@ def task_changed_files_from_log(run_dir: Path, task_id: str) -> list[str]:
 
 def product_surface(issue_text: str, title: str) -> str:
     lowered = issue_text.lower()
-    if "--sessions" in lowered or "session_index" in lowered or "_codex_recent" in lowered:
-        return "recent-session suggestions"
     if "cli" in lowered:
         return "CLI output"
     if "widget" in lowered:
@@ -1775,12 +1788,10 @@ def agent_provider(agent_cfg: dict | None = None) -> str:
 def resolve_agent_binary(provider: str, agent_cfg: dict | None = None) -> str:
     agent_cfg = agent_cfg or {}
     command = str(agent_cfg.get("command") or provider).strip()
-    if provider == "codex":
-        return command
     resolved = command if "/" in command else shutil.which(command)
-    if provider == "claude" and not resolved:
-        raise RuntimeError("missing_claude_cli: Claude CLI was not found on PATH")
-    return resolved or command
+    if not resolved:
+        raise RuntimeError(f"missing_{provider}_cli: {provider} CLI was not found on PATH")
+    return resolved
 
 
 def codex_command(cwd: Path, output_path: Path, extra_writable: Path, agent_cfg: dict | None = None) -> list[str]:
@@ -2994,7 +3005,35 @@ def print_status(project: str, as_json: bool) -> None:
     print(f"SCHEDULER installed={scheduler.get('installed')} loaded={scheduler.get('loaded')} label={scheduler.get('label')}")
 
 
-def init_command(project: str | None, cwd: Path) -> None:
+def doctor_command(project: str | None, cwd: Path) -> None:
+    checks: list[tuple[str, bool]] = []
+    checks.append(("git", bool(shutil.which("git"))))
+    gh = shutil.which("gh")
+    checks.append(("gh CLI", bool(gh)))
+    checks.append(("gh authenticated", bool(gh and gh_auth_ok())))
+    checks.append(("sandbox-exec (macOS verification isolation)", bool(shutil.which("sandbox-exec"))))
+    resolved = None
+    providers: set[str] = set()
+    try:
+        resolved = resolve_project(cwd, project=project, bootstrap=False)
+        cfg = registry_project(resolved)
+        providers = {agent_provider(a) for a in cfg.get("agents", {}).values()}
+    except Exception:
+        providers = set()
+    for p in sorted(providers or {"codex"}):
+        binary = "claude" if p == "claude" else "codex"
+        checks.append((f"{binary} CLI (provider: {p})", bool(shutil.which(binary))))
+    ok = True
+    for name, passed in checks:
+        ok = ok and passed
+        print(f"  [{'PASS' if passed else 'FAIL'}] {name}")
+    suffix = f" project={resolved}" if resolved else ""
+    print(f"LOOP_DOCTOR {'ok' if ok else 'issues_found'}{suffix}")
+
+
+def init_command(project: str | None, cwd: Path, provider: str | None = None) -> None:
+    if provider:
+        os.environ["LOOP_DEFAULT_PROVIDER"] = provider
     resolved = resolve_project(cwd, project=project, bootstrap=True)
     print(f"LOOP_INITIALIZED project={resolved}")
     print_status(resolved, False)
@@ -3640,6 +3679,16 @@ def unattended(project: str, cycles: int, interval_minutes: float, commit: bool)
 def scheduler_status_payload(project: str) -> dict:
     label = scheduler_label(project)
     path = scheduler_plist_path(project)
+    if not shutil.which("launchctl"):
+        state = load_state()
+        runtime = state_project(state, project).get("scheduler_runtime", {})
+        pid = runtime.get("pid")
+        daemon_alive = bool(pid and process_alive(int(pid)))
+        return {
+            "label": label, "plist": str(path), "installed": False,
+            "loaded": daemon_alive, "launchd_loaded": False,
+            "legacy_plist_installed": False, "daemon_alive": daemon_alive, "daemon_pid": pid,
+        }
     result = run(["launchctl", "list", label], cwd=ENGINE_ROOT.parent, check=False)
     state = load_state()
     runtime = state_project(state, project).get("scheduler_runtime", {})
@@ -3675,6 +3724,8 @@ def install_scheduler(project: str) -> None:
 
 
 def cleanup_legacy_launch_agent(project: str) -> bool:
+    if not shutil.which("launchctl"):
+        return False
     label = scheduler_label(project)
     path = scheduler_plist_path(project)
     removed = False
@@ -3768,6 +3819,9 @@ def main() -> int:
     sub = parser.add_subparsers(dest="command", required=True)
     init_parser = sub.add_parser("init")
     init_parser.add_argument("--project")
+    init_parser.add_argument("--provider", choices=["codex", "claude"])
+    doctor_parser = sub.add_parser("doctor")
+    doctor_parser.add_argument("--project")
     start_parser = sub.add_parser("start")
     start_parser.add_argument("--project")
     status_parser = sub.add_parser("status")
@@ -3814,7 +3868,9 @@ def main() -> int:
     try:
         cwd = Path.cwd()
         if args.command == "init":
-            init_command(args.project, cwd)
+            init_command(args.project, cwd, provider=args.provider)
+        elif args.command == "doctor":
+            doctor_command(args.project, cwd)
         elif args.command == "start":
             start_command(args.project, cwd)
         elif args.command == "status":

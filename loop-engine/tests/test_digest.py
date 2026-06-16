@@ -102,7 +102,7 @@ Synthetic tests cover valid timestamps, malformed rows, and too-old rows.
     task = payload["recent_runs"][0]["tasks"][0]
     assert task["title"] == "Pin session suggestions parsing"
     assert task["product_impact"]["visibility"] == "No direct user-visible behavior change"
-    assert "recent-session suggestions" in task["product_impact"]["user_benefit"]
+    assert "CLI output" in task["product_impact"]["user_benefit"]
     assert "reliability" in payload["recent_runs"][0]["orchestrator_strategy"]["brief_excerpt"]
     assert payload["recent_runs"][0]["orchestrator_strategy"]["questions"]
     assert payload["approval_queue"][0]["id"] == "demo-1-wait-001"

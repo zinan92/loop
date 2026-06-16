@@ -50,7 +50,7 @@ Before the human starts `loop` (especially unattended), tell them, plainly:
 
 > A failed auto-merge is **not** a reason code: the cycle ends `needs_human` with the task marked `pass` but no merged PR — inspect the run log / `cycle-summary.json` and resolve the conflict on the pilot branch.
 
-`LOOP_BLOCKED` reasons from `loop init` (no mutation occurs): `not_git_repo`, `missing_github_remote`, `missing_github_auth`, `missing_linear_team` (only when Linear is explicitly enabled).
+`LOOP_BLOCKED` reasons from `loop init` (no mutation occurs): `not_git_repo`, `missing_github_remote`, `missing_github_auth`, `github_repo_not_found`, `unsupported_platform` (no sandbox-exec / non-macOS), `missing_linear_team` (only when Linear is explicitly enabled). Run `loop doctor` to preflight all of these.
 
 > Not an init reason: a `provider: claude` role whose Claude CLI is absent raises a `missing_claude_cli` **RuntimeError during cycle execution** (planner/worker/reviewer), not during `loop init`.
 
@@ -75,6 +75,8 @@ commands:
   resume:   { in: "project", out: "job active, next tick fires" }
   stop:     { in: "project", out: "job stopped, scheduler unloaded for that project" }
   digest:   { in: "project [--json]", out: "reports/<project>/latest.md + .html" }
+  doctor:   { in: "project (optional)", out: "PASS/FAIL preflight: git, gh+auth, sandbox-exec, the provider CLI in use" }
+  init --provider codex|claude: bootstrap an all-codex or all-claude project (default codex)
 
 gates:                      # in cycle order
   - value_line: value_score >= value_threshold (default 3), else no-op

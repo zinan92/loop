@@ -84,7 +84,7 @@ fail  a higher-value item needs approval               → pause before doing lo
 | A coding-agent CLI — Codex (`codex exec`) and/or Claude Code (`claude --print`) | `codex --version` / `claude --version` |
 | (optional) Linear API key | set `LINEAR_API_KEY` or `LOOP_LINEAR_API_KEY_FILE` |
 
-If any of `gh` auth / GitHub remote / git repo is missing, `loop init` **fails closed** with a `LOOP_BLOCKED` reason (`missing_github_auth`, `missing_github_remote`, `not_git_repo`) and makes no changes.
+If a prerequisite is missing, `loop init` **fails closed** with a `LOOP_BLOCKED` reason (`missing_github_auth`, `missing_github_remote`, `not_git_repo`, `github_repo_not_found`, `unsupported_platform`) **before any mutation**. Tip: `loop doctor` checks everything at once — including the agent CLI your registry actually requires.
 
 ---
 
@@ -102,7 +102,7 @@ ln -sf "$(pwd)/loop-engine/bin/loop" ~/.local/bin/loop
 export PATH="$HOME/.local/bin:$PATH"   # add to ~/.zshrc to persist
 
 # 3) Pre-flight (all must pass before init)
-gh auth status && which sandbox-exec && { codex --version || claude --version; }
+loop doctor   # checks gh / sandbox-exec / the agent CLI your registry needs (re-run after init)
 
 # 4) Initialize a target product repo (run from INSIDE it)
 cd /path/to/your-product-repo        # must be a clean git repo with a GitHub origin
@@ -230,7 +230,7 @@ Each role can run on a different provider via the `agents` block in `registry.js
 }
 ```
 
-`provider` defaults to `codex`, so existing registries keep working unchanged — in fact `loop init` writes the `agents` block **without** a `provider` key, and the `codex` default applies; add `provider` only to override a role to `claude`. For `claude`, the engine rejects unsafe permission modes (`bypassPermissions` raises an error); a missing Claude CLI raises `missing_claude_cli` at cycle time. A common safe split is **Claude worker + Codex reviewer** (let Claude write, keep an independent reviewer gating).
+`provider` defaults to `codex`, so existing registries keep working unchanged — in fact `loop init` writes the `agents` block **without** a `provider` key, and the `codex` default applies; add `provider` only to override a role to `claude`. For `claude`, the engine rejects unsafe permission modes (`bypassPermissions` raises an error); a missing Claude CLI raises `missing_claude_cli` at cycle time. A common safe split is **Claude worker + Codex reviewer** (let Claude write, keep an independent reviewer gating). Bootstrap an all-Claude project with `loop init --provider claude` (or `LOOP_DEFAULT_PROVIDER=claude`): it sets `provider: claude` for every role and **omits the model** so the Claude CLI uses its own current default. Codex roles keep `model: gpt-5.5` — set a model id your account can access if needed.
 
 ---
 
