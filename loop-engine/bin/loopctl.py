@@ -971,6 +971,14 @@ def create_bootstrap_commit_and_branch(repo_path: Path, project_id: str) -> str:
     return pilot_branch
 
 
+def resolve_project_contract_path(repo_path: Path, cfg: dict) -> Path:
+    raw = cfg.get("contract_path")
+    if raw:
+        path = Path(str(raw)).expanduser()
+        return path if path.is_absolute() else repo_path / path
+    return repo_path / ".loop" / "contract.yaml"
+
+
 def registry_project_by_repo(repo_path: Path) -> str | None:
     root = str(repo_path.resolve())
     for project_id, cfg in registry_data().get("projects", {}).items():
@@ -1014,7 +1022,11 @@ def bootstrap_project(cwd: Path) -> str:
         raise LoopBlocked("not_git_repo", "Current directory is not inside a git repository")
     existing = registry_project_by_repo(repo_path)
     if existing:
-        return existing
+        existing_cfg = registry_project(existing)
+        existing_contract = resolve_project_contract_path(repo_path, existing_cfg)
+        if existing_contract.exists():
+            return existing
+        return repair_registered_project_contract(repo_path, existing, existing_cfg, existing_contract)
     ensure_clean_for_bootstrap(repo_path)
     origin_url = git_origin_url(repo_path)
     github_repo = github_repo_from_origin(origin_url)
@@ -1078,6 +1090,61 @@ def bootstrap_project(cwd: Path) -> str:
         "agents": default_agents(bootstrap_provider),
     }
     save_registry(registry)
+    state = load_state()
+    project_state = state_project(state, project_id)
+    project_state.setdefault("status", "stopped")
+    project_state.setdefault("waiting_for_human", [])
+    project_state.setdefault("rollback", {})["product_baseline_tag"] = baseline_tag
+    save_state(state)
+    return project_id
+
+
+def repair_registered_project_contract(repo_path: Path, project_id: str, cfg: dict, contract_path: Path) -> str:
+    ensure_clean_for_bootstrap(repo_path)
+    origin_url = git_origin_url(repo_path)
+    github_repo = cfg.get("github_repo") or github_repo_from_origin(origin_url)
+    if not github_repo:
+        raise LoopBlocked(
+            "missing_github_remote",
+            "Loop contract repair requires a GitHub origin remote; v1 does not create GitHub repos.",
+            {"repo_path": str(repo_path), "origin": origin_url or ""},
+        )
+    if not gh_auth_ok():
+        raise LoopBlocked("missing_github_auth", "GitHub CLI auth is required before loop contract repair")
+    if not shutil.which("sandbox-exec"):
+        raise LoopBlocked("unsupported_platform", "loop requires macOS (sandbox-exec) to run verified cycles")
+    if not github_repo_exists(str(github_repo), repo_path):
+        raise LoopBlocked("github_repo_not_found", f"GitHub repo {github_repo} not found or not accessible; create and push it before loop init")
+
+    project_name = str(cfg.get("name") or repo_path.name)
+    verification_commands = cfg.get("verification_commands") or detect_verification_commands(repo_path)
+    baseline_tag = create_product_baseline_tag(repo_path, project_id)
+    contract_path.parent.mkdir(parents=True, exist_ok=True)
+    contract_path.write_text(render_contract(project_id, project_name, repo_path, verification_commands))
+    ensure_product_runtime_gitignore(repo_path)
+    pilot_branch = create_bootstrap_commit_and_branch(repo_path, project_id)
+
+    registry = registry_data()
+    project_cfg = registry.setdefault("projects", {}).setdefault(project_id, {})
+    project_cfg.update({
+        "name": project_name,
+        "repo_path": str(repo_path),
+        "pilot_branch": pilot_branch,
+        "contract_path": str(contract_path),
+        "github_repo": github_repo,
+        "verification_commands": verification_commands,
+    })
+    project_cfg.setdefault("auto_execute_risk", "low")
+    project_cfg.setdefault("output_language", "English")
+    project_cfg.setdefault("auto_approval", {
+        "silent_approval_after_minutes": 30,
+        "only_if_risk": "low",
+        "max_tasks_per_cycle": 1,
+        "blocked_categories": list(BLOCKED_SIGNALS.keys()),
+    })
+    project_cfg.setdefault("agents", default_agents(os.environ.get("LOOP_DEFAULT_PROVIDER")))
+    save_registry(registry)
+
     state = load_state()
     project_state = state_project(state, project_id)
     project_state.setdefault("status", "stopped")

@@ -579,6 +579,50 @@ def test_portfolio_init_loop_all_eligible_bootstraps_all_ready_repos(monkeypatch
     assert approvals["approved"]["video"]["readiness_action"] == "init_loop"
 
 
+def test_bootstrap_repairs_registered_repo_missing_contract(monkeypatch, tmp_path):
+    repo = make_plain_git_repo(tmp_path, "newsletter")
+    engine = patch_engine(monkeypatch, tmp_path, make_repo(tmp_path))
+    registry = loopctl.registry_data()
+    registry["projects"] = {
+        "newsletter": {
+            "name": "Newsletter",
+            "repo_path": str(repo),
+            "github_repo": "owner/newsletter",
+            "pilot_branch": "loop/newsletter-pilot",
+            "contract_path": str(repo / ".loop" / "contract.yaml"),
+            "verification_commands": ["python3 -m pytest tests/"],
+            "auto_approval": {"blocked_categories": [], "max_tasks_per_cycle": 1},
+        }
+    }
+    loopctl.save_registry(registry)
+    calls = []
+
+    monkeypatch.setattr(loopctl, "gh_auth_ok", lambda: True)
+    monkeypatch.setattr(loopctl, "github_repo_exists", lambda github_repo, cwd: True)
+    monkeypatch.setattr(loopctl, "create_product_baseline_tag", lambda repo_path, project_id: f"pre-loop-{project_id}")
+
+    def fake_commit_and_branch(path, project_id):
+        calls.append((path, project_id))
+        assert (path / ".loop" / "contract.yaml").exists()
+        return f"loop/{project_id}-pilot"
+
+    monkeypatch.setattr(loopctl, "create_bootstrap_commit_and_branch", fake_commit_and_branch)
+
+    initialized = loopctl.bootstrap_project(repo)
+
+    assert initialized == "newsletter"
+    assert calls == [(repo, "newsletter")]
+    contract = repo / ".loop" / "contract.yaml"
+    assert contract.exists()
+    assert "project_id: newsletter" in contract.read_text()
+    repaired = loopctl.registry_project("newsletter")
+    assert repaired["contract_path"] == str(contract)
+    assert repaired["pilot_branch"] == "loop/newsletter-pilot"
+    state = loopctl.load_state()
+    assert state["projects"]["newsletter"]["rollback"]["product_baseline_tag"] == "pre-loop-newsletter"
+    assert engine.exists()
+
+
 def test_morning_without_portfolio_requires_onboarding(monkeypatch, tmp_path):
     repo = make_repo(tmp_path)
     patch_engine(monkeypatch, tmp_path, repo)
