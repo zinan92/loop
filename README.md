@@ -195,6 +195,8 @@ The intake profile writes `current_stage`, `progress_percent`, and `stage_taxono
 **Daily portfolio verification — shown every morning, not asked from scratch:**
 `loop morning` refuses to run with no portfolio (`LOOP_BLOCKED reason=portfolio_missing`). Once the registry exists, every daily review begins with a **Portfolio Registry Verification** table showing project, mode, review flag, readiness, local path, GitHub, Linear, and URL. It also refreshes portfolio intake profiles and shows a **Portfolio Readiness Board** so high-value readiness work does not get hidden behind "not initialized yet." The operator should verify this is the full portfolio before approving loops. Missing or non-executable entries stay visible as `init-loop`, `plan-only`, `read-only`, `hold`, or `blocked`; they are not silently ignored.
 
+For local Git repos, `init-loop` is a required readiness gate, not a soft suggestion. Any portfolio entry with readiness `blocked_needs_loop_init` is normalized back to `decision: "init-loop"` even if the PM agent tries to mark it `plan-only` or `hold`. Use `loop approve --all-init-loop` during onboarding or morning review to initialize every eligible repo, then rerun `loop morning` before starting execution loops.
+
 **Morning — decide value, then approve:**
 1. `loop morning [project...]` runs the built-in PM Review Agent over the portfolio registry, intake profiles, and registered project snapshots, reads current loop state/digests/evening scorecards, ranks value-first work, assigns low/medium/high risk, and writes:
    - `loop-engine/pm-reviews/YYYY-MM-DD.md`
@@ -209,7 +211,7 @@ The intake profile writes `current_stage`, `progress_percent`, and `stage_taxono
    - recommended: `loop approve <project> --approve-medium`
    - `loop approve <project> --medium-envelope <name> --allowed-file ... --verification-command ...`
    - PM-recommended verification commands are clipped to the project's trusted `verification_commands`; untrusted suggestions are shown in the morning review but are not written into the approved envelope.
-4. Readiness work can be the highest-value work. If an important repo is not loop-ready, morning review may recommend defining its artifact contract, verification commands, and baseline, or explicitly approving loop init with `loop approve <project> --init-loop`. That command mutates the repo by running loop bootstrap, then asks you to run morning review again before execution.
+4. Readiness work can be the highest-value work. If an important local Git repo is not loop-ready, morning review treats loop init as a required setup gate: define its artifact contract, verification commands, and baseline, then explicitly approve loop init with `loop approve <project> --init-loop`. That command mutates the repo by running loop bootstrap, then asks you to run morning review again before execution.
    - To approve every `init-loop` project recommended by the latest morning review: `loop approve --all-init-loop`
    - During first onboarding, to initialize every eligible local Git repo in the portfolio: `loop portfolio init-loop --all-eligible`
 

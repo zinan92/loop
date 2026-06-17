@@ -4087,6 +4087,9 @@ def normalize_pm_row(raw: dict, baseline: dict) -> dict:
     decision = str(raw.get("decision") or baseline.get("decision") or "plan-only").lower().strip()
     if decision not in {"loop", "init-loop", "plan-only", "hold", "read-only", "blocked"}:
         decision = "plan-only"
+    raw_decision = decision
+    if readiness == "blocked_needs_loop_init":
+        decision = "init-loop"
     if decision == "loop" and not (registered and readiness == "executable"):
         decision = "init-loop" if readiness == "blocked_needs_loop_init" else "blocked"
     if decision == "init-loop" and readiness != "blocked_needs_loop_init":
@@ -4096,6 +4099,8 @@ def normalize_pm_row(raw: dict, baseline: dict) -> dict:
         normalize_pm_task(task if isinstance(task, dict) else {}, index)
         for index, task in enumerate(raw_tasks, start=1)
     ] or baseline["tasks"]
+    if readiness == "blocked_needs_loop_init" and raw_decision != "init-loop":
+        tasks = baseline["tasks"]
     tasks = sorted(tasks, key=lambda item: int(item["value_score"]), reverse=True)
     for index, task in enumerate(tasks, start=1):
         task["rank"] = index
@@ -4119,6 +4124,17 @@ def normalize_pm_row(raw: dict, baseline: dict) -> dict:
     }
     if row["top_risk"] not in {"low", "medium", "high"}:
         row["top_risk"] = top["risk"]
+    if readiness == "blocked_needs_loop_init":
+        row["decision"] = "init-loop"
+        row["recommended_cycles"] = 0
+        row["approval_needed"] = (
+            f"required init-loop readiness gate: run `loop approve {row['project']} --init-loop`; "
+            "then rerun `loop morning` before execution"
+        )
+        row["stop_condition"] = (
+            "Do not run an execution loop until this project is initialized with a loop contract, "
+            "trusted verification, and a clean baseline."
+        )
     row["portfolio"] = baseline.get("portfolio") or {}
     row["readiness"] = readiness
     row["portfolio_profile"] = baseline.get("portfolio_profile") or {}
@@ -4501,15 +4517,22 @@ def render_morning_review(rows: list[dict], summary: str = "", questions: list[s
         "",
         "- None yet. Use `loop approve <project>` after choosing today's work.",
         "",
-        "## Recommended Init-Loop Approvals",
+        "## Required Init-Loop Readiness Gate",
         "",
     ])
     init_rows = [row for row in rows if row.get("decision") == "init-loop"]
     if init_rows:
+        lines.extend([
+            "These portfolio entries have a local Git repo but are not loop-initialized yet. Treat this as setup debt, not optional backlog.",
+            "",
+            f"- Bulk command: `loop approve --all-init-loop`",
+            "- After any successful init-loop approval, rerun `loop morning` before starting execution.",
+            "",
+        ])
         for row in init_rows:
             lines.append(
-                f"- `{display_text(row['project'])}`: approve readiness bootstrap with "
-                f"`loop approve {display_text(row['project'])} --init-loop`; then rerun `loop morning` before execution."
+                f"- `{display_text(row['project'])}`: required readiness bootstrap with "
+                f"`loop approve {display_text(row['project'])} --init-loop`."
             )
     else:
         lines.append("- None")

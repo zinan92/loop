@@ -352,6 +352,61 @@ def test_morning_review_surfaces_readiness_work_for_uninitialized_repo(monkeypat
     assert engine.exists()
 
 
+def test_morning_review_forces_uninitialized_git_repos_to_init_loop(monkeypatch, tmp_path):
+    registered = make_repo(tmp_path)
+    patch_engine(monkeypatch, tmp_path, registered)
+    newsletter_repo = make_plain_git_repo(tmp_path, "newsletter")
+    loopctl.save_portfolio({
+        "version": 1,
+        "projects": {
+            "newsletter": {
+                "id": "newsletter",
+                "name": "Newsletter",
+                "mode": "plan-only",
+                "default_review": True,
+                "handles": {
+                    "local_path": str(newsletter_repo),
+                    "github_repo": "owner/newsletter",
+                },
+            },
+        },
+    })
+    patch_pm_agent(monkeypatch, {
+        "date": loopctl.today_date(),
+        "summary": "The PM agent tried to postpone readiness.",
+        "projects": [
+            {
+                "project": "newsletter",
+                "decision": "plan-only",
+                "today_focus": "Think about newsletter later.",
+                "top_value_task": "Hold the project.",
+                "top_risk": "low",
+                "tasks": [
+                    {
+                        "rank": 1,
+                        "task": "Hold the project.",
+                        "value_score": 1,
+                        "risk": "low",
+                        "approval_path": "PM review only",
+                        "benefit": "No change.",
+                    },
+                ],
+            },
+        ],
+        "questions_for_operator": [],
+    })
+
+    result = loopctl.write_morning_review(None)
+
+    row = result["plan"]["projects"][0]
+    assert row["decision"] == "init-loop"
+    assert row["recommended_cycles"] == 0
+    assert "required init-loop readiness gate" in row["approval_needed"]
+    assert row["tasks"][0]["task"].startswith("Prepare loop readiness")
+    assert "Required Init-Loop Readiness Gate" in result["markdown"]
+    assert "loop approve --all-init-loop" in result["markdown"]
+
+
 def test_morning_review_refreshes_missing_portfolio_profile(monkeypatch, tmp_path):
     registered = make_repo(tmp_path)
     patch_engine(monkeypatch, tmp_path, registered)

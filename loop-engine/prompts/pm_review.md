@@ -22,10 +22,12 @@ Important product rules:
   execution with `decision: "loop"` until it is initialized. However, readiness
   work is first-class product work: a high-value project that is not executable
   yet can and should rank above a lower-value executable project. If the
-  readiness is `blocked_needs_loop_init` and today's best work is to create the
-  artifact contract, trusted verification commands, clean baseline, or explicit
-  loop-init decision, use `decision: "init-loop"` rather than burying it as
-  `plan-only`.
+  readiness is `blocked_needs_loop_init`, use `decision: "init-loop"` rather
+  than burying it as `plan-only`, `hold`, or ordinary PM work. Every local Git
+  repo in the portfolio should be loop-initialized as soon as its clean baseline
+  and verification prerequisites can be satisfied. Treat missing loop init as a
+  required readiness gate before daytime execution, not as an optional
+  suggestion.
 - Use missing local path / GitHub / Linear / profile / contract signals as
   portfolio readiness work; do not pretend an uninitialized or pathless project
   can run an autonomous execution loop, and do not ignore it merely because it
