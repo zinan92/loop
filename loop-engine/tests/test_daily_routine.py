@@ -599,6 +599,7 @@ def test_bootstrap_repairs_registered_repo_missing_contract(monkeypatch, tmp_pat
 
     monkeypatch.setattr(loopctl, "gh_auth_ok", lambda: True)
     monkeypatch.setattr(loopctl, "github_repo_exists", lambda github_repo, cwd: True)
+    monkeypatch.setattr(loopctl.shutil, "which", lambda name: "/usr/bin/sandbox-exec" if name == "sandbox-exec" else None)
     monkeypatch.setattr(loopctl, "create_product_baseline_tag", lambda repo_path, project_id: f"pre-loop-{project_id}")
 
     def fake_commit_and_branch(path, project_id):
