@@ -33,3 +33,6 @@ dist/
 build/
 venv/
 .venv/
+
+# Loop runtime handoff artifacts.
+.loop/daily-focus/
