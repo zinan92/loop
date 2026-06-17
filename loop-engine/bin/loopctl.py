@@ -28,6 +28,14 @@ DEFAULT_CADENCE_SECONDS = 60 * 60
 LOCK_DIR = ENGINE_ROOT / "locks"
 LAUNCH_AGENT_DIR = Path.home() / "Library" / "LaunchAgents"
 LAUNCH_LABEL_PREFIX = "com.agent-loop"
+PORTFOLIO_STAGES = ("idea", "building_mvp", "mvp_released", "released_v1", "iterating")
+PORTFOLIO_STAGE_PROGRESS = {
+    "idea": 10,
+    "building_mvp": 35,
+    "mvp_released": 60,
+    "released_v1": 80,
+    "iterating": 90,
+}
 # Where the engine reads the operator's real secret values to scan worker diffs for
 # leaks. Env-configurable (LOOP_SECRETS_DIR) so adopters point it at their own secret
 # store instead of a hardcoded personal path; default ~/.config/loop/secrets.
@@ -1415,18 +1423,61 @@ def primary_artifact_candidates(repo_path: Path, kind: str) -> list[str]:
     return candidates[:10]
 
 
+def normalize_portfolio_stage(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    stage = value.strip().lower().replace("-", "_")
+    return stage if stage in PORTFOLIO_STAGES else None
+
+
+def normalize_progress_percent(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        percent = int(value)
+    except (TypeError, ValueError):
+        return None
+    return max(0, min(100, percent))
+
+
+def portfolio_stage_from_entry(entry: dict) -> str | None:
+    for container in (entry, entry.get("profile"), entry.get("metadata"), entry.get("handles")):
+        if isinstance(container, dict):
+            stage = normalize_portfolio_stage(container.get("stage") or container.get("current_stage"))
+            if stage:
+                return stage
+    return None
+
+
+def portfolio_progress_from_entry(entry: dict) -> int | None:
+    for container in (entry, entry.get("profile"), entry.get("metadata"), entry.get("handles")):
+        if isinstance(container, dict):
+            progress = normalize_progress_percent(
+                container.get("progress_percent")
+                if "progress_percent" in container
+                else container.get("progress")
+            )
+            if progress is not None:
+                return progress
+    return None
+
+
+def portfolio_stage_progress(stage: str) -> int:
+    return PORTFOLIO_STAGE_PROGRESS.get(stage, PORTFOLIO_STAGE_PROGRESS["idea"])
+
+
 def profile_stage(readiness: str, kind: str, git_status: str, has_contract: bool) -> str:
     if readiness == "executable":
-        return "loop-ready"
+        return "mvp_released" if has_contract else "building_mvp"
     if readiness == "blocked_needs_loop_init":
-        if git_status and git_status != "clean":
-            return "repo-known-needs-baseline-reconciliation"
-        return "repo-known-ready-for-loop-init"
+        return "building_mvp"
     if readiness in {"plan_only_missing_local_path", "pm_only_missing_local_path", "identity_only"}:
-        return "portfolio-identity-needs-handles"
+        return "idea"
     if kind == "trading":
-        return "read-only-evidence-review"
-    return "planning"
+        return "building_mvp"
+    if git_status == "no local repo":
+        return "idea"
+    return "building_mvp"
 
 
 def risk_boundaries_for_kind(kind: str) -> dict:
@@ -1527,7 +1578,10 @@ def build_portfolio_profile(entry: dict) -> dict:
     verification = detect_verification_commands(repo_path) if repo_path and git_root_path else []
     artifacts = primary_artifact_candidates(repo_path, kind) if repo_path else []
     end_goal = readme_title_or_goal(readme, f"Clarify the end goal for {name}.")
-    stage = profile_stage(readiness, kind, git_status, has_contract)
+    stage = portfolio_stage_from_entry(entry) or profile_stage(readiness, kind, git_status, has_contract)
+    progress_percent = portfolio_progress_from_entry(entry)
+    if progress_percent is None:
+        progress_percent = portfolio_stage_progress(stage)
     blockers: list[str] = []
     if readiness != "executable":
         blockers.append(readiness)
@@ -1550,7 +1604,11 @@ def build_portfolio_profile(entry: dict) -> dict:
         "primary_artifact": artifacts[0] if artifacts else "to_be_defined",
         "known_artifacts": artifacts,
         "current_stage": stage,
+        "progress_percent": progress_percent,
+        "stage_taxonomy": list(PORTFOLIO_STAGES),
         "current_progress": {
+            "stage": stage,
+            "progress_percent": progress_percent,
             "readiness": readiness,
             "git_status": git_status,
             "has_loop_contract": has_contract,
@@ -1575,6 +1633,8 @@ def render_portfolio_profile(profile: dict) -> str:
         f"- updated_at: `{profile.get('updated_at')}`",
         f"- loop_readiness: `{profile.get('loop_readiness')}`",
         f"- current_stage: `{profile.get('current_stage')}`",
+        f"- progress_percent: `{profile.get('progress_percent')}%`",
+        f"- stage_taxonomy: {', '.join(f'`{stage}`' for stage in PORTFOLIO_STAGES)}",
         "",
         "## End Goal",
         "",
@@ -1592,6 +1652,8 @@ def render_portfolio_profile(profile: dict) -> str:
         "",
     ])
     progress = profile.get("current_progress") or {}
+    lines.append(f"- stage: `{progress.get('stage') or profile.get('current_stage')}`")
+    lines.append(f"- progress_percent: `{progress.get('progress_percent', profile.get('progress_percent'))}%`")
     lines.append(f"- git_status: `{progress.get('git_status')}`")
     lines.append(f"- has_loop_contract: `{progress.get('has_loop_contract')}`")
     entries = progress.get("top_level_entries") or []
@@ -4780,6 +4842,7 @@ def portfolio_intake_command(projects: list[str] | None = None, json_output: boo
             "kind": profile["kind"],
             "loop_readiness": profile["loop_readiness"],
             "current_stage": profile["current_stage"],
+            "progress_percent": profile["progress_percent"],
             "profile_json": str(paths["json"]),
             "profile_md": str(paths["md"]),
             "next_steps": profile.get("next_steps") or [],
@@ -4790,7 +4853,8 @@ def portfolio_intake_command(projects: list[str] | None = None, json_output: boo
     for profile in profiles:
         print(
             f"PORTFOLIO_INTAKE project={profile['project']} "
-            f"kind={profile['kind']} readiness={profile['loop_readiness']} stage={profile['current_stage']}"
+            f"kind={profile['kind']} readiness={profile['loop_readiness']} "
+            f"stage={profile['current_stage']} progress={profile['progress_percent']}%"
         )
         print(f"PORTFOLIO_PROFILE {profile['profile_md']}")
 

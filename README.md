@@ -180,6 +180,18 @@ By default **only the top-ranked auto-runnable task executes per cycle** (`max_t
    - `loop-engine/portfolio/<project>/profile.md`
    - `loop-engine/portfolio/<project>/profile.json`
 
+Portfolio progress uses one fixed product-stage taxonomy so the dashboard can be updated over time instead of reinvented each morning:
+
+| stage | default progress | meaning |
+|---|---:|---|
+| `idea` | 10% | early concept or portfolio identity without enough concrete handles/artifacts |
+| `building_mvp` | 35% | repo or artifact exists, but the MVP contract/readiness is still being established |
+| `mvp_released` | 60% | core user/operator value is usable and loop-ready, but not yet a formal v1 |
+| `released_v1` | 80% | first stable version with a repeatable artifact, verification, and operating flow |
+| `iterating` | 90% | post-v1 product in continuous improvement mode |
+
+The intake profile writes `current_stage`, `progress_percent`, and `stage_taxonomy`. If a portfolio entry explicitly sets `stage` or `progress_percent`, intake preserves that state; otherwise it uses the defaults above.
+
 **Daily portfolio verification — shown every morning, not asked from scratch:**
 `loop morning` refuses to run with no portfolio (`LOOP_BLOCKED reason=portfolio_missing`). Once the registry exists, every daily review begins with a **Portfolio Registry Verification** table showing project, mode, review flag, readiness, local path, GitHub, Linear, and URL. It also refreshes portfolio intake profiles and shows a **Portfolio Readiness Board** so high-value readiness work does not get hidden behind "not initialized yet." The operator should verify this is the full portfolio before approving loops. Missing or non-executable entries stay visible as `init-loop`, `plan-only`, `read-only`, `hold`, or `blocked`; they are not silently ignored.
 

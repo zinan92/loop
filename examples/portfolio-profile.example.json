@@ -8,8 +8,12 @@
   "primary_user_or_operator": "operator",
   "primary_artifact": "README.md",
   "known_artifacts": ["README.md", "src/", "tests/"],
-  "current_stage": "repo-known-ready-for-loop-init",
+  "current_stage": "building_mvp",
+  "progress_percent": 35,
+  "stage_taxonomy": ["idea", "building_mvp", "mvp_released", "released_v1", "iterating"],
   "current_progress": {
+    "stage": "building_mvp",
+    "progress_percent": 35,
     "readiness": "blocked_needs_loop_init",
     "git_status": "clean",
     "has_loop_contract": false,

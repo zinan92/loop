@@ -227,9 +227,86 @@ def test_portfolio_intake_writes_cto_profile_for_local_repo(monkeypatch, tmp_pat
     profile = loopctl.load_portfolio_profile("newsletter")
     assert profile["project"] == "newsletter"
     assert profile["loop_readiness"] == "blocked_needs_loop_init"
+    assert profile["current_stage"] == "building_mvp"
+    assert profile["progress_percent"] == 35
+    assert profile["stage_taxonomy"] == [
+        "idea",
+        "building_mvp",
+        "mvp_released",
+        "released_v1",
+        "iterating",
+    ]
     assert profile["verification_candidates"] == ["python3 -m pytest tests/"]
     assert "missing_loop_contract" in profile["blockers"]
-    assert (tmp_path / "engine" / "portfolio" / "newsletter" / "profile.md").exists()
+    profile_md = tmp_path / "engine" / "portfolio" / "newsletter" / "profile.md"
+    assert profile_md.exists()
+    assert "progress_percent: `35%`" in profile_md.read_text()
+
+
+def test_portfolio_profile_uses_standard_stage_defaults(monkeypatch, tmp_path):
+    repo = make_repo(tmp_path)
+    patch_engine(monkeypatch, tmp_path, repo)
+    loopctl.save_portfolio({
+        "version": 1,
+        "projects": {
+            "demo": {
+                "id": "demo",
+                "name": "Demo",
+                "mode": "loop",
+                "default_review": True,
+                "handles": {
+                    "loop_project_id": "demo",
+                    "local_path": str(repo),
+                    "github_repo": "owner/demo",
+                },
+            },
+            "early-idea": {
+                "id": "early-idea",
+                "name": "Early Idea",
+                "mode": "plan-only",
+                "default_review": True,
+                "handles": {},
+            },
+        },
+    })
+
+    loopctl.portfolio_intake_command(["demo", "early-idea"])
+
+    demo = loopctl.load_portfolio_profile("demo")
+    idea = loopctl.load_portfolio_profile("early-idea")
+    assert demo["current_stage"] == "mvp_released"
+    assert demo["progress_percent"] == 60
+    assert idea["current_stage"] == "idea"
+    assert idea["progress_percent"] == 10
+
+
+def test_portfolio_profile_respects_stage_and_progress_override(monkeypatch, tmp_path):
+    repo = make_repo(tmp_path)
+    patch_engine(monkeypatch, tmp_path, repo)
+    loopctl.save_portfolio({
+        "version": 1,
+        "projects": {
+            "demo": {
+                "id": "demo",
+                "name": "Demo",
+                "mode": "loop",
+                "default_review": True,
+                "stage": "iterating",
+                "progress_percent": 92,
+                "handles": {
+                    "loop_project_id": "demo",
+                    "local_path": str(repo),
+                    "github_repo": "owner/demo",
+                },
+            },
+        },
+    })
+
+    loopctl.portfolio_intake_command(["demo"])
+
+    profile = loopctl.load_portfolio_profile("demo")
+    assert profile["current_stage"] == "iterating"
+    assert profile["progress_percent"] == 92
 
 
 def test_morning_review_surfaces_readiness_work_for_uninitialized_repo(monkeypatch, tmp_path):

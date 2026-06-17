@@ -28,7 +28,7 @@ Before the human starts `loop` (especially unattended), tell them, plainly:
   - `runs[-1].status` → `merged | no_op | needs_human | failed | ...`
 - **Read the recap from a file**, not by re-running digest: `loop-engine/reports/<project>/latest.md`.
 - **Start with portfolio onboarding once:** `loop portfolio init`, then `loop portfolio add ...` using any handle the human has (local path, GitHub repo/URL, Linear project, URL, or plain name). `loop init` also upserts the current repo into the portfolio.
-- **Run CTO catch-up for the portfolio:** `loop portfolio intake [project...]` writes `loop-engine/portfolio/<project>/profile.{md,json}` with end goal, current stage/progress, primary artifacts, verification candidates, readiness blockers, next steps, and task-level risk boundaries.
+- **Run CTO catch-up for the portfolio:** `loop portfolio intake [project...]` writes `loop-engine/portfolio/<project>/profile.{md,json}` with end goal, current stage/progress, primary artifacts, verification candidates, readiness blockers, next steps, and task-level risk boundaries. Portfolio stages are fixed to `idea`, `building_mvp`, `mvp_released`, `released_v1`, and `iterating`; do not invent new stage labels.
 - **Start each day with PM review:** `loop morning` refreshes portfolio intake profiles, shows Portfolio Registry Verification and Portfolio Readiness boards, then runs the PM Review Agent and writes `pm-reviews/YYYY-MM-DD.{md,json}`; `loop approve <project>` writes the project's `.loop/daily-focus/latest.md`.
 - **Do not ignore non-ready high-value projects:** if a project is valuable but lacks `.loop/contract.yaml`, clean baseline, or verification commands, surface readiness work. `loop approve <project> --init-loop` is the explicit mutation path for approved loop bootstrap; `loop approve --all-init-loop` applies the latest morning review's recommended init-loop projects, and `loop portfolio init-loop --all-eligible` bootstraps every eligible local Git repo during onboarding. After any init-loop approval, rerun `loop morning` before execution.
 - **Approve medium risk once per day:** when morning recommends a bounded envelope, `loop approve <project> --approve-medium` approves all same-day medium-risk items that stay inside that envelope. Do not approve medium risk item-by-item inside each cycle.
@@ -76,6 +76,7 @@ output_language: 'registry.json project field (or LOOP_OUTPUT_LANGUAGE env); def
 
 commands:
   portfolio: { in: "operator machine", out: "~/.config/loop/portfolio.json via init|add|status plus portfolio/<project>/profile.{md,json} via intake; source of truth for daily PM review" }
+  portfolio_stages: { allowed: [idea, building_mvp, mvp_released, released_v1, iterating], default_progress_percent: { idea: 10, building_mvp: 35, mvp_released: 60, released_v1: 80, iterating: 90 } }
   setup:    { in: "operator machine", out: "~/.config/loop/config.json + missing-action prompts" }
   init:     { in: "product repo cwd", out: ".loop/contract.yaml + registry + pilot branch", fail: "LOOP_BLOCKED <reason>" }
   morning:  { in: "portfolio registry + registered project snapshots", out: "portfolio verification board + pm-reviews/YYYY-MM-DD.{md,json} + latest.{md,json}, PM-agent value-ranked portfolio board" }
