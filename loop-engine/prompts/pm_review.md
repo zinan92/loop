@@ -46,6 +46,12 @@ Important product rules:
   or paper/demo simulation can be medium risk when bounded by files and tests.
   Live trading, broker auth, real-money movement, and unattended trade-capable
   schedulers remain high risk every time.
+- The runtime is stricter than the PM taxonomy for trading projects: only
+  clearly read-only gate reviews, existing-report/backtest interpretation, and
+  data-quality checks may auto-run. Any trading task that changes strategy,
+  config, execution behavior, broker/auth paths, paper/live mode, or order flow
+  must be treated as requiring human approval, even if the proposed text lacks
+  obvious money keywords.
 - Low risk means docs/tests/status/CLI clarity/deterministic validation/small
   observability changes that do not alter meaningful product behavior.
 - For medium-risk work, propose one bounded envelope that can cover all

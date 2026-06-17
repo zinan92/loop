@@ -4,6 +4,8 @@ import pathlib
 import subprocess
 import sys
 
+import pytest
+
 
 ENGINE = pathlib.Path(__file__).resolve().parents[1]
 _spec = importlib.util.spec_from_file_location("loopctl", ENGINE / "bin" / "loopctl.py")
@@ -311,6 +313,9 @@ def test_approve_init_loop_bootstraps_portfolio_project(monkeypatch, tmp_path):
     assert saved["handles"]["loop_project_id"] == "newsletter"
     approvals = loopctl.load_latest_approvals()
     assert approvals["approved"]["newsletter"]["readiness_action"] == "init_loop"
+    with pytest.raises(loopctl.LoopBlocked) as exc:
+        loopctl.start_day_command(["newsletter"])
+    assert exc.value.reason == "morning_required_after_init_loop"
 
 
 def test_morning_without_portfolio_requires_onboarding(monkeypatch, tmp_path):

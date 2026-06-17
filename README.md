@@ -232,7 +232,7 @@ In short: PM skills are strongly recommended power-ups, not runtime dependencies
 - **Medium-risk** (visible local UI, small product-surface behavior, payload/schema changes with tests, single-module refactors) → can be approved once each morning with `loop approve <project> --approve-medium`; every task must stay inside that day's code-enforced envelope, and the first execution is supervised.
 - **High-risk** (credentials/secrets/`.env`, external auth, launchd/cron, publishing/deploy, destructive ops, broker credentials, live broker orders, real-money movement, live trading config flips, broad rewrites, cross-project permission expansion) → **stays manual, never auto-executed.**
 
-Risk is task-level, not project-level. A trading project is not automatically high risk: read-only gate review or backtest analysis can be low risk; offline/paper simulation can be medium; live broker/auth/money movement stays high.
+Risk is task-level, not project-level. A trading project is not automatically high risk: read-only gate review or backtest analysis can be low risk; offline/paper simulation can be medium; live broker/auth/money movement stays high. The runtime is still **default-deny for trading auto-execution**: only clearly read-only gate reviews, existing-report/backtest interpretation, or data-quality checks may auto-run. Any trading task that changes strategy, config, execution behavior, broker/auth paths, paper/live mode, or order flow gates to human even if the planner labels it low risk.
 
 ## Value line / 价值线
 
@@ -333,6 +333,7 @@ Per-item `waiting_for_human[].reason`:
 | `untrusted_verification` | a verification command isn't in the contract's trusted set | add it to `.loop/contract.yaml`, or run it manually → `loop resume` |
 | `medium_risk_requires_approval` / `medium_risk_requires_supervised_run` | a medium-risk item needs today's envelope + first supervised run | run `loop approve <project> --approve-medium` if morning recommended it, or approve a manual envelope; first run uses `--supervised` |
 | `medium_envelope_violation` | the medium-risk task exceeded its envelope (files/commands) | tighten the issue or widen the envelope deliberately |
+| `trading_requires_manual_approval` | trading-project work was not clearly read-only/backtest/data-quality review | approve and run manually; live/broker/money paths stay high risk |
 | `high_risk_requires_approval` | a high-risk candidate was surfaced | stays manual — never auto-run |
 | `unsupported_risk` | the issue's risk field wasn't `low` or `medium` | fix the issue's `## Risk` |
 | `task_gated` | worker/reviewer/merge raised an exception | inspect `task-error.txt` + logs before retrying |

@@ -49,6 +49,7 @@ Before the human starts `loop` (especially unattended), tell them, plainly:
 | `untrusted_verification` | a verification command isn't in the contract's trusted set | add to `.loop/contract.yaml` or verify manually; `loop resume` |
 | `medium_risk_requires_approval` / `medium_risk_requires_supervised_run` | medium-risk item needs today's envelope + first supervised run | use `loop approve <project> --approve-medium` if morning recommended it, or approve a manual envelope; first run is supervised |
 | `medium_envelope_violation` | medium task exceeded its envelope | tighten the issue or widen the envelope deliberately |
+| `trading_requires_manual_approval` | trading-project work was not clearly read-only/backtest/data-quality review | approve and run manually; live/broker/money paths stay high risk |
 | `high_risk_requires_approval` | a high-risk candidate was surfaced | stays manual — never auto-run |
 | `unsupported_risk` | issue risk field wasn't `low` or `medium` | fix the issue's `## Risk` |
 | `task_gated` | worker/reviewer/merge raised an exception | inspect `task-error.txt` + logs before retrying |
@@ -97,6 +98,7 @@ gates:                      # in cycle order
   - value_line: value_score >= value_threshold (default 3), else no-op
   - do_nothing: after max_noop_cycles (default 2) consecutive no-ops, auto-pause
   - risk_envelope: non-low/medium risk gated (unsupported_risk); medium needs same-day preapproved envelope and first supervised run; high never auto-runs; risk is task-level, not project-level
+  - trading_default_deny: trading projects auto-run only clearly read-only gate reviews, existing-report/backtest interpretation, or data-quality checks; every other trading task gates to human even if labeled low risk
   - blocked_category: keyword scan of issue intent over 7 categories -> gate to human
   - untrusted_verification: issue verification commands must match the contract's trusted set
   - higher_value_blocker: a waiting higher-value item blocks lower-value work
@@ -112,6 +114,7 @@ risk_model:
   trading_low: "read-only gate review, backtest/report interpretation, data-quality checks with no broker/live path"
   trading_medium: "offline or paper/demo strategy changes bounded by files and verification"
   trading_high: "broker credentials, live orders, real-money movement, live trading config flips, unattended trade-capable scheduler"
+  trading_runtime: "default-deny for automatic execution: only trading_low may auto-run; trading_medium and trading_high require human approval"
 
 sandbox_scope:
   verification_commands: "sandbox-exec; network denied; secret dirs denied; scrubbed env"

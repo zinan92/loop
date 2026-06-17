@@ -1490,7 +1490,7 @@ def next_steps_for_profile(entry: dict, readiness: str, kind: str, git_status: s
         return steps
     if kind == "trading":
         return [
-            "Keep work read-only unless Wendy explicitly approves a bounded paper/offline task.",
+            "Keep work read-only unless the operator explicitly approves a bounded paper/offline task.",
             "Produce ALLOW, DENY, or NO_TRADE with artifact evidence before any config change.",
             "Treat broker credentials, live orders, and real-money movement as high risk every time.",
         ]
@@ -1508,6 +1508,9 @@ def next_steps_for_profile(entry: dict, readiness: str, kind: str, git_status: s
 
 def build_portfolio_profile(entry: dict) -> dict:
     row = portfolio_entry_to_row(entry)
+    profile_row = dict(row)
+    if profile_row.get("local_path") not in (None, "-"):
+        profile_row["local_path"] = f"<local:{Path(str(profile_row['local_path'])).name}>"
     project = row["project"]
     name = row["name"]
     readiness = row["readiness"]
@@ -1558,7 +1561,7 @@ def build_portfolio_profile(entry: dict) -> dict:
         "blockers": blockers,
         "next_steps": next_steps_for_profile(entry, readiness, kind, git_status, verification),
         "risk_boundaries": risk_boundaries_for_kind(kind),
-        "portfolio": row,
+        "portfolio": profile_row,
     }
     return profile
 
@@ -1671,7 +1674,12 @@ BLOCKED_SIGNALS: dict[str, list[str]] = {
                                "delete all", "truncate", "reset --hard"],
     "money_or_trading": ["binance", "place order", "spot order", "futures",
                          "live trade", "withdraw", "wallet", "payment",
-                         "real money", "send eth", "send btc", "transfer funds"],
+                         "real money", "send eth", "send btc", "transfer funds",
+                         "live trading", "live config", "execution mode",
+                         "dry_run", "dry run", "paper mode", "order submission",
+                         "broker credential", "broker credentials",
+                         "broker config", "submit order", "send order",
+                         "place trades", "real-money"],
     "broad_architecture_rewrite": ["rewrite", "rearchitect", "migrate the entire",
                                     "overhaul", "ground-up", "from scratch"],
 }
@@ -1796,6 +1804,23 @@ NEGATIVE_SCREEN_MARKERS = (
     "never ",
     "without ",
     "avoid ",
+)
+NEGATION_CONTRAST_MARKERS = (" instead ", " but ", " however ", " then ", "; instead", ", instead")
+TRADING_READ_ONLY_MARKERS = (
+    "read-only",
+    "read only",
+    "gate review",
+    "review existing",
+    "existing reports",
+    "backtest output",
+    "backtest report",
+    "report interpretation",
+    "data-quality",
+    "data quality",
+    "no_trade",
+    "no trade",
+    "allow, deny",
+    "deny, or no_trade",
 )
 
 
@@ -1932,10 +1957,49 @@ def positive_intent_text(sections: dict[str, str]) -> str:
             normalized = line.strip().lower().lstrip("-*").strip()
             if not normalized:
                 continue
-            if any(marker in normalized for marker in NEGATIVE_SCREEN_MARKERS):
+            if (
+                any(marker in normalized for marker in NEGATIVE_SCREEN_MARKERS)
+                and not any(marker in f" {normalized} " for marker in NEGATION_CONTRAST_MARKERS)
+            ):
                 continue
             lines.append(line)
     return "\n".join(lines).strip()
+
+
+def issue_intent_text(issue_path: Path) -> str:
+    sections = issue_sections(issue_path)
+    return (positive_intent_text(sections) or issue_path.read_text()).lower()
+
+
+def project_is_trading(cfg: dict) -> bool:
+    text = " ".join(
+        str(value)
+        for value in [
+            cfg.get("name"),
+            cfg.get("github_repo"),
+            cfg.get("repo_path"),
+            cfg.get("pilot_branch"),
+        ]
+        if value
+    ).lower()
+    if any(token in text for token in ("trading", "trade", "gold", "broker", "quant")):
+        return True
+    project_id = registry_project_by_repo(Path(cfg["repo_path"])) if cfg.get("repo_path") else None
+    profile = load_portfolio_profile(project_id) if project_id else {}
+    return str(profile.get("kind") or "").lower() == "trading"
+
+
+def issue_is_read_only_trading_work(issue_path: Path) -> bool:
+    text = issue_intent_text(issue_path)
+    return any(marker in text for marker in TRADING_READ_ONLY_MARKERS)
+
+
+def trading_issue_gate(issue_path: Path, cfg: dict) -> str | None:
+    if not project_is_trading(cfg):
+        return None
+    if issue_is_read_only_trading_work(issue_path):
+        return None
+    return "trading_requires_manual_approval"
 
 
 def screen_blocked(issue_path: Path, blocked_categories: list[str]) -> list[str]:
@@ -1945,11 +2009,7 @@ def screen_blocked(issue_path: Path, blocked_categories: list[str]) -> list[str]
     sections (Out Of Scope, Reviewer Checklist) are deliberately excluded so
     that an issue *forbidding* credentials/launchd/publishing is not mis-gated.
     """
-    sections = issue_sections(issue_path)
-    intent = positive_intent_text(sections)
-    # If the issue lacks the expected structure, fail closed by scanning the
-    # whole document (a malformed issue gets gated to human, which is safe).
-    text = (intent or issue_path.read_text()).lower()
+    text = issue_intent_text(issue_path)
     hits: list[str] = []
     for category in blocked_categories:
         for signal in BLOCKED_SIGNALS.get(category, []):
@@ -2310,6 +2370,19 @@ def validate_medium_issue_against_envelope(issue_path: Path, cfg: dict, envelope
             "medium-risk issue verification exceeds preapproved envelope: "
             + "; ".join(outside_envelope)
         )
+    forbidden_changes = [
+        str(item).strip().lower()
+        for item in (envelope.get("forbidden_changes") or [])
+        if str(item).strip()
+    ]
+    if forbidden_changes:
+        issue_text = issue_intent_text(issue_path)
+        forbidden_hits = [item for item in forbidden_changes if item in issue_text]
+        if forbidden_hits:
+            raise RuntimeError(
+                "medium-risk issue mentions forbidden change(s): "
+                + "; ".join(forbidden_hits)
+            )
     trusted_verification_commands(issue_path, cfg)
 
 
@@ -2960,6 +3033,7 @@ def waiting_item(run_id: str, index: int, item: dict) -> dict:
         "medium_risk_requires_approval": "Approve a bounded medium-risk envelope in the Daily PM Review before execution.",
         "medium_risk_requires_supervised_run": "Run `loop run-now --supervised` only while watching the first execution.",
         "medium_envelope_violation": "Tighten the issue to the preapproved file and verification envelope, or reject it.",
+        "trading_requires_manual_approval": "Trading auto-execution is read-only only; approve non-read-only, broker, config, paper/live, or order-flow work manually.",
         "high_risk_requires_approval": "High-risk work must stay manual; do not run it through unattended loop execution.",
         "no_candidate_over_value_line": "Update the daily focus or accept that this project should stop for today.",
         "unsupported_risk": "Only low risk and supervised preapproved medium risk are executable by the loop.",
@@ -4930,6 +5004,12 @@ def start_day_command(projects: list[str] | None) -> None:
     for project in selected:
         if project not in approved:
             raise LoopBlocked("not_approved_today", f"Project {project!r} is not approved for today's loop start.")
+        if approved[project].get("readiness_action") == "init_loop":
+            raise LoopBlocked(
+                "morning_required_after_init_loop",
+                f"Project {project!r} was approved only for loop initialization; run loop morning and approve execution before start-day.",
+                {"project": project, "next_actions": ["loop morning", f"loop approve {project}"]},
+            )
         registry_project(project)
         medium = approved[project].get("medium_envelope")
         if medium and not approved[project].get("medium_first_supervised_at"):
@@ -5484,6 +5564,13 @@ def cycle(project: str, locked: bool = True, supervised: bool = False) -> dict:
         screened: list[Path] = []
         for path in issue_paths:
             risk = parse_issue_risk(path)
+            trading_gate = trading_issue_gate(path, cfg)
+            if trading_gate:
+                waiting_for_human.append({
+                    "issue_path": str(path),
+                    "reason": trading_gate,
+                })
+                continue
             if risk not in {"low", "medium"}:
                 waiting_for_human.append({
                     "issue_path": str(path), "reason": "unsupported_risk", "risk": risk or "missing",

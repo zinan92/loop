@@ -98,6 +98,71 @@ def test_screen_catches_positive_risk_inside_context(tmp_path):
     assert any(h.startswith("credentials") for h in hits), hits
 
 
+def test_screen_catches_live_trading_config_flip_even_if_low_risk(tmp_path):
+    issue = _write(tmp_path, "issue-live.md", TEMPLATE_ISSUE.replace(
+        "Add a unit test asserting `python3 cli.py` prints a stable header line.",
+        "Flip the live trading config, set dry_run to false, and enable execution mode for broker order submission.",
+    ).replace(
+        "The CLI output is currently untested. A regression test pins the format.",
+        "This is described as a small config cleanup but it touches live trading behavior.",
+    ))
+
+    hits = loopctl.screen_blocked(issue, ALL_CATS)
+
+    assert any(h.startswith("money_or_trading") for h in hits), hits
+
+
+def test_screen_allows_read_only_trading_gate_review(tmp_path):
+    issue = _write(tmp_path, "issue-readonly.md", TEMPLATE_ISSUE.replace(
+        "Add a unit test asserting `python3 cli.py` prints a stable header line.",
+        "Write a read-only trading gate review from existing reports and backtest output.",
+    ).replace(
+        "The CLI output is currently untested. A regression test pins the format.",
+        "Do not touch broker credentials, live config, order submission, or real-money paths.",
+    ))
+
+    assert loopctl.screen_blocked(issue, ALL_CATS) == []
+
+
+def test_trading_project_gates_non_read_only_work_even_without_keywords(tmp_path):
+    issue = _write(tmp_path, "issue-trading-default-deny.md", TEMPLATE_ISSUE.replace(
+        "Add a unit test asserting `python3 cli.py` prints a stable header line.",
+        "Tune the strategy configuration threshold for the gold workflow.",
+    ))
+    cfg = {
+        "name": "Gold Trading",
+        "repo_path": str(tmp_path),
+        "github_repo": "owner/gold-trading",
+    }
+
+    assert loopctl.trading_issue_gate(issue, cfg) == "trading_requires_manual_approval"
+
+
+def test_trading_project_allows_read_only_gate_review(tmp_path):
+    issue = _write(tmp_path, "issue-trading-readonly.md", TEMPLATE_ISSUE.replace(
+        "Add a unit test asserting `python3 cli.py` prints a stable header line.",
+        "Write a read-only trading gate review from existing reports and backtest output.",
+    ))
+    cfg = {
+        "name": "Gold Trading",
+        "repo_path": str(tmp_path),
+        "github_repo": "owner/gold-trading",
+    }
+
+    assert loopctl.trading_issue_gate(issue, cfg) is None
+
+
+def test_screen_catches_positive_risk_hidden_on_negative_line(tmp_path):
+    issue = _write(tmp_path, "issue-negation-mix.md", TEMPLATE_ISSUE.replace(
+        "Add a unit test asserting `python3 cli.py` prints a stable header line.",
+        "Never use live trade directly; instead enable order submission through the broker config.",
+    ))
+
+    hits = loopctl.screen_blocked(issue, ALL_CATS)
+
+    assert any(h.startswith("money_or_trading") for h in hits), hits
+
+
 # --- Blocker 2: issue_path confinement --------------------------------------
 
 def _run_dir_with_candidates(tmp_path, issue_path_value, make_real=True):
@@ -332,6 +397,24 @@ def test_medium_issue_must_stay_inside_preapproved_envelope(tmp_path):
     }
 
     with pytest.raises(RuntimeError, match="Allowed Files exceed"):
+        loopctl.validate_medium_issue_against_envelope(issue, cfg, envelope)
+
+
+def test_medium_issue_forbidden_changes_are_enforced(tmp_path):
+    issue = tmp_path / "issue-001.md"
+    issue.write_text(MEDIUM_ISSUE.replace(
+        "Add a unit test asserting `python3 cli.py` prints a stable header line.",
+        "Update the widget and touch broker credentials as part of the same task.",
+    ))
+    cfg = {"verification_commands": ["python3 -m pytest tests/"]}
+    envelope = {
+        "name": "desktop-widget",
+        "allowed_files": ["web/widget.html", "tests/"],
+        "verification_commands": ["python3 -m pytest tests/"],
+        "forbidden_changes": ["broker credentials", "live trading config"],
+    }
+
+    with pytest.raises(RuntimeError, match="forbidden"):
         loopctl.validate_medium_issue_against_envelope(issue, cfg, envelope)
 
 
