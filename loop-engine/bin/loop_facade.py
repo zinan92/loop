@@ -16,9 +16,9 @@ def usage(code: int = 2) -> int:
         "  /loop init [project] [--provider codex|claude]\n"
         "  /loop setup [--yes] [--provider codex|claude]\n"
         "  /loop doctor [project]\n"
-        "  /loop portfolio init|add|status|intake|init-loop\n"
+        "  /loop portfolio init|add|status|intake|init-loop [project|--all-eligible]\n"
         "  /loop morning [project...]\n"
-        "  /loop approve [project] [--approve-medium | --medium-envelope NAME]\n"
+        "  /loop approve [project] [--approve-medium | --medium-envelope NAME | --init-loop | --all-init-loop]\n"
         "  /loop reject [project]\n"
         "  /loop start-day [project...]\n"
         "  /loop evening [project...]\n"
@@ -46,7 +46,17 @@ def optional_project_arg(args: list[str]) -> tuple[str | None, list[str]]:
     index = 0
     while index < len(args):
         arg = args[index]
-        if arg in {"--json", "--supervised", "--yes", "--start", "--medium", "--approve-medium", "--init-loop"}:
+        if arg in {
+            "--json",
+            "--supervised",
+            "--yes",
+            "--start",
+            "--medium",
+            "--approve-medium",
+            "--init-loop",
+            "--all-init-loop",
+            "--all-eligible",
+        }:
             passthrough.append(arg)
         elif arg in {
             "--provider",

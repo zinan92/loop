@@ -198,6 +198,8 @@ By default **only the top-ranked auto-runnable task executes per cycle** (`max_t
    - `loop approve <project> --medium-envelope <name> --allowed-file ... --verification-command ...`
    - PM-recommended verification commands are clipped to the project's trusted `verification_commands`; untrusted suggestions are shown in the morning review but are not written into the approved envelope.
 4. Readiness work can be the highest-value work. If an important repo is not loop-ready, morning review may recommend defining its artifact contract, verification commands, and baseline, or explicitly approving loop init with `loop approve <project> --init-loop`. That command mutates the repo by running loop bootstrap, then asks you to run morning review again before execution.
+   - To approve every `init-loop` project recommended by the latest morning review: `loop approve --all-init-loop`
+   - During first onboarding, to initialize every eligible local Git repo in the portfolio: `loop portfolio init-loop --all-eligible`
 
 **Day — execute only approved work:**
 1. `loop start-day [project...]` starts approved projects only.

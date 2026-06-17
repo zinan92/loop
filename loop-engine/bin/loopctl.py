@@ -4844,6 +4844,77 @@ def portfolio_init_loop_project(project: str, provider: str | None = None) -> st
     return initialized
 
 
+def approve_init_loop_project(project: str, provider: str | None = None) -> str:
+    initialized = portfolio_init_loop_project(project, provider=provider)
+    approvals = load_latest_approvals()
+    approvals.setdefault("approved", {})[initialized] = {
+        "approved_at": now_iso(),
+        "project": initialized,
+        "readiness_action": "init_loop",
+        "medium_envelope": None,
+        "medium_auto_approved_for_day": False,
+    }
+    approvals.setdefault("rejected", {}).pop(initialized, None)
+    write_approvals(approvals)
+    return initialized
+
+
+def init_loop_eligible_projects(projects: list[str] | None = None) -> list[str]:
+    entries = portfolio_entries(projects)
+    eligible: list[str] = []
+    for entry in entries:
+        row = portfolio_entry_to_row(entry)
+        if row["readiness"] == "blocked_needs_loop_init":
+            eligible.append(str(row["project"]))
+    return eligible
+
+
+def latest_recommended_init_loop_projects() -> list[str]:
+    plan = latest_pm_plan()
+    recommended = [
+        str(row.get("project"))
+        for row in (plan.get("projects") if isinstance(plan.get("projects"), list) else [])
+        if isinstance(row, dict) and row.get("decision") == "init-loop" and row.get("project")
+    ]
+    return recommended
+
+
+def bulk_approve_init_loop(projects: list[str], provider: str | None = None) -> dict:
+    if not projects:
+        raise LoopBlocked(
+            "no_init_loop_projects",
+            "No projects are eligible or recommended for init-loop approval.",
+        )
+    successes: list[str] = []
+    failures: list[dict] = []
+    for project in projects:
+        try:
+            initialized = approve_init_loop_project(project, provider=provider)
+        except LoopBlocked as exc:
+            failures.append({
+                "project": project,
+                "reason": exc.reason,
+                "message": str(exc),
+                "details": exc.details,
+            })
+            print(f"INIT_LOOP_BLOCKED project={project} reason={exc.reason}")
+            continue
+        successes.append(initialized)
+        print(f"INIT_LOOP_APPROVED project={initialized}")
+    if failures and not successes:
+        raise LoopBlocked(
+            "all_init_loop_blocked",
+            "Every requested init-loop project was blocked.",
+            {"failures": failures},
+        )
+    if failures:
+        print(f"INIT_LOOP_PARTIAL successes={len(successes)} blocked={len(failures)}")
+    else:
+        print(f"INIT_LOOP_COMPLETE successes={len(successes)}")
+    print("INIT_LOOP_NEXT run `loop morning` again before starting execution.")
+    return {"successes": successes, "failures": failures}
+
+
 def portfolio_command(args: argparse.Namespace) -> None:
     if args.portfolio_command == "init":
         portfolio_init_command()
@@ -4863,8 +4934,18 @@ def portfolio_command(args: argparse.Namespace) -> None:
     elif args.portfolio_command == "intake":
         portfolio_intake_command(args.project or None, json_output=args.json)
     elif args.portfolio_command == "init-loop":
-        initialized = portfolio_init_loop_project(args.project, provider=args.provider)
-        print(f"PORTFOLIO_INIT_LOOP project={initialized}")
+        if args.all_eligible:
+            projects = init_loop_eligible_projects()
+            bulk_approve_init_loop(projects, provider=args.provider)
+        else:
+            if not args.project:
+                raise LoopBlocked(
+                    "missing_project",
+                    "`loop portfolio init-loop` requires a project or --all-eligible.",
+                )
+            initialized = approve_init_loop_project(args.project, provider=args.provider)
+            print(f"PORTFOLIO_INIT_LOOP project={initialized}")
+            print("INIT_LOOP_NEXT run `loop morning` again before starting execution.")
 
 
 def setup_command(
@@ -4944,25 +5025,25 @@ def approve_command(
     verification_commands: list[str],
     approve_medium: bool = False,
     init_loop: bool = False,
+    all_init_loop: bool = False,
     start_after: bool = False,
 ) -> None:
+    if all_init_loop:
+        if project:
+            projects = [project]
+        else:
+            projects = latest_recommended_init_loop_projects()
+            if not projects:
+                projects = init_loop_eligible_projects()
+        bulk_approve_init_loop(projects)
+        return
     if init_loop:
         if not project:
             raise LoopBlocked(
                 "missing_project",
                 "`loop approve --init-loop` requires a portfolio project id.",
             )
-        initialized = portfolio_init_loop_project(project)
-        approvals = load_latest_approvals()
-        approvals.setdefault("approved", {})[initialized] = {
-            "approved_at": now_iso(),
-            "project": initialized,
-            "readiness_action": "init_loop",
-            "medium_envelope": None,
-            "medium_auto_approved_for_day": False,
-        }
-        approvals.setdefault("rejected", {}).pop(initialized, None)
-        write_approvals(approvals)
+        initialized = approve_init_loop_project(project)
         print(f"LOOP_INIT_APPROVED project={initialized}")
         print("LOOP_INIT_READY run `loop morning` again before starting execution.")
         return
@@ -6045,7 +6126,8 @@ def main() -> int:
     portfolio_intake.add_argument("project", nargs="*")
     portfolio_intake.add_argument("--json", action="store_true")
     portfolio_init_loop = portfolio_sub.add_parser("init-loop")
-    portfolio_init_loop.add_argument("project")
+    portfolio_init_loop.add_argument("project", nargs="?")
+    portfolio_init_loop.add_argument("--all-eligible", action="store_true")
     portfolio_init_loop.add_argument("--provider", choices=["codex", "claude"])
     morning_parser = sub.add_parser("morning")
     morning_parser.add_argument("--project", action="append")
@@ -6055,6 +6137,7 @@ def main() -> int:
     approve_parser.add_argument("--approve-medium", action="store_true")
     approve_parser.add_argument("--medium-envelope")
     approve_parser.add_argument("--init-loop", action="store_true")
+    approve_parser.add_argument("--all-init-loop", action="store_true")
     approve_parser.add_argument("--allowed-file", action="append", default=[])
     approve_parser.add_argument("--verification-command", action="append", default=[])
     approve_parser.add_argument("--start", action="store_true")
@@ -6141,6 +6224,7 @@ def main() -> int:
                 args.verification_command,
                 approve_medium=args.approve_medium,
                 init_loop=args.init_loop,
+                all_init_loop=args.all_init_loop,
                 start_after=args.start,
             )
         elif args.command == "reject":

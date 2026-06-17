@@ -185,6 +185,14 @@ def test_facade_supports_doctor_and_init_provider(monkeypatch):
     assert loop_facade.main() == 0
     assert captured["cmd"][-4:] == ["approve", "--init-loop", "--project", "newsletter"]
 
+    monkeypatch.setattr(sys, "argv", ["loop", "approve", "--all-init-loop"])
+    assert loop_facade.main() == 0
+    assert captured["cmd"][-2:] == ["approve", "--all-init-loop"]
+
+    monkeypatch.setattr(sys, "argv", ["loop", "portfolio", "init-loop", "--all-eligible"])
+    assert loop_facade.main() == 0
+    assert captured["cmd"][-3:] == ["portfolio", "init-loop", "--all-eligible"]
+
 
 def test_portfolio_add_accepts_multiple_handle_types(monkeypatch, tmp_path, capsys):
     repo = make_repo(tmp_path)
@@ -352,6 +360,91 @@ def test_approve_init_loop_bootstraps_portfolio_project(monkeypatch, tmp_path):
     with pytest.raises(loopctl.LoopBlocked) as exc:
         loopctl.start_day_command(["newsletter"])
     assert exc.value.reason == "morning_required_after_init_loop"
+
+
+def test_approve_all_init_loop_uses_morning_recommendations(monkeypatch, tmp_path, capsys):
+    repo = make_plain_git_repo(tmp_path, "newsletter")
+    video_repo = make_plain_git_repo(tmp_path, "video")
+    patch_engine(monkeypatch, tmp_path, make_repo(tmp_path))
+    loopctl.portfolio_add_command(None, "Newsletter", str(repo), "owner/newsletter", None, None, "plan-only", True)
+    loopctl.portfolio_add_command(None, "Video", str(video_repo), "owner/video", None, None, "plan-only", True)
+    calls = []
+
+    def fake_bootstrap(path):
+        path = pathlib.Path(path)
+        project = path.name
+        calls.append(project)
+        registry = loopctl.registry_data()
+        registry.setdefault("projects", {})[project] = {
+            "name": project.title(),
+            "repo_path": str(path),
+            "github_repo": f"owner/{project}",
+            "pilot_branch": f"loop/{project}-pilot",
+            "contract_path": str(path / ".loop" / "contract.yaml"),
+            "verification_commands": ["python3 -m pytest tests/"],
+            "auto_approval": {"blocked_categories": [], "max_tasks_per_cycle": 1},
+        }
+        loopctl.save_registry(registry)
+        return project
+
+    monkeypatch.setattr(loopctl, "bootstrap_project", fake_bootstrap)
+    plan_paths = loopctl.pm_review_paths()
+    plan_paths["dir"].mkdir(parents=True, exist_ok=True)
+    plan = {
+        "date": loopctl.today_date(),
+        "projects": [
+            {"project": "newsletter", "decision": "init-loop"},
+        ],
+    }
+    plan_paths["latest_json"].write_text(json.dumps(plan))
+
+    loopctl.approve_command(None, repo, None, [], [], all_init_loop=True)
+
+    output = capsys.readouterr().out
+    assert "INIT_LOOP_APPROVED project=newsletter" in output
+    assert calls == ["newsletter"]
+    approvals = loopctl.load_latest_approvals()
+    assert approvals["approved"]["newsletter"]["readiness_action"] == "init_loop"
+    assert "video" not in approvals["approved"]
+
+
+def test_portfolio_init_loop_all_eligible_bootstraps_all_ready_repos(monkeypatch, tmp_path, capsys):
+    repo = make_plain_git_repo(tmp_path, "newsletter")
+    video_repo = make_plain_git_repo(tmp_path, "video")
+    patch_engine(monkeypatch, tmp_path, make_repo(tmp_path))
+    loopctl.portfolio_add_command(None, "Newsletter", str(repo), "owner/newsletter", None, None, "plan-only", True)
+    loopctl.portfolio_add_command(None, "Video", str(video_repo), "owner/video", None, None, "plan-only", True)
+    loopctl.portfolio_add_command(None, "Idea", None, None, None, None, "hold", True)
+    calls = []
+
+    def fake_bootstrap(path):
+        path = pathlib.Path(path)
+        project = path.name
+        calls.append(project)
+        registry = loopctl.registry_data()
+        registry.setdefault("projects", {})[project] = {
+            "name": project.title(),
+            "repo_path": str(path),
+            "github_repo": f"owner/{project}",
+            "pilot_branch": f"loop/{project}-pilot",
+            "contract_path": str(path / ".loop" / "contract.yaml"),
+            "verification_commands": ["python3 -m pytest tests/"],
+            "auto_approval": {"blocked_categories": [], "max_tasks_per_cycle": 1},
+        }
+        loopctl.save_registry(registry)
+        return project
+
+    monkeypatch.setattr(loopctl, "bootstrap_project", fake_bootstrap)
+
+    projects = loopctl.init_loop_eligible_projects()
+    loopctl.bulk_approve_init_loop(projects)
+
+    output = capsys.readouterr().out
+    assert "INIT_LOOP_COMPLETE successes=2" in output
+    assert sorted(calls) == ["newsletter", "video"]
+    approvals = loopctl.load_latest_approvals()
+    assert approvals["approved"]["newsletter"]["readiness_action"] == "init_loop"
+    assert approvals["approved"]["video"]["readiness_action"] == "init_loop"
 
 
 def test_morning_without_portfolio_requires_onboarding(monkeypatch, tmp_path):
