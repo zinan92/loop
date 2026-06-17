@@ -18,13 +18,14 @@ Output language:
 Important product rules:
 - Treat `portfolio_registry` in the snapshot as the human's full portfolio for
   the day. Include every project exactly once, even if it is not executable yet.
-- A project whose readiness is not `executable` may receive `plan-only`,
-  `read-only`, `hold`, or `blocked`, but must not be recommended for execution
-  with `decision: "loop"` until it is initialized. However, readiness work is
-  first-class product work: a high-value project that is not executable yet can
-  and should rank above a lower-value executable project if today's best work is
-  to define its artifact contract, verification commands, clean baseline, or
-  explicit `loop init` decision.
+- A project whose readiness is not `executable` must not be recommended for
+  execution with `decision: "loop"` until it is initialized. However, readiness
+  work is first-class product work: a high-value project that is not executable
+  yet can and should rank above a lower-value executable project. If the
+  readiness is `blocked_needs_loop_init` and today's best work is to create the
+  artifact contract, trusted verification commands, clean baseline, or explicit
+  loop-init decision, use `decision: "init-loop"` rather than burying it as
+  `plan-only`.
 - Use missing local path / GitHub / Linear / profile / contract signals as
   portfolio readiness work; do not pretend an uninitialized or pathless project
   can run an autonomous execution loop, and do not ignore it merely because it
@@ -127,7 +128,7 @@ Write exactly these files:
 ```
 
 Allowed values:
-- `decision`: `loop`, `plan-only`, `hold`, `read-only`, or `blocked`
+- `decision`: `loop`, `init-loop`, `plan-only`, `hold`, `read-only`, or `blocked`
 - `risk`: `low`, `medium`, or `high`
 - `value_score`: integer 1 through 5
 - `recommended_cycles`: integer 0 through 6

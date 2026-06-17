@@ -260,10 +260,46 @@ def test_morning_review_surfaces_readiness_work_for_uninitialized_repo(monkeypat
     assert row["project"] == "newsletter"
     assert row["tasks"][0]["value_score"] == 5
     assert row["tasks"][0]["risk"] == "medium"
-    assert row["decision"] == "plan-only"
+    assert row["decision"] == "init-loop"
+    assert "loop approve newsletter --init-loop" in text
     snapshot = json.loads(result["paths"]["snapshot"].read_text())
     assert snapshot["projects"][0]["portfolio_profile"]["loop_readiness"] == "blocked_needs_loop_init"
     assert engine.exists()
+
+
+def test_morning_review_refreshes_missing_portfolio_profile(monkeypatch, tmp_path):
+    registered = make_repo(tmp_path)
+    patch_engine(monkeypatch, tmp_path, registered)
+    newsletter_repo = make_plain_git_repo(tmp_path, "newsletter")
+    loopctl.save_portfolio({
+        "version": 1,
+        "projects": {
+            "newsletter": {
+                "id": "newsletter",
+                "name": "Newsletter",
+                "mode": "plan-only",
+                "default_review": True,
+                "handles": {
+                    "local_path": str(newsletter_repo),
+                    "github_repo": "owner/newsletter",
+                },
+            },
+        },
+    })
+    patch_pm_agent(monkeypatch, {
+        "date": loopctl.today_date(),
+        "summary": "Newsletter should be initialized before execution.",
+        "projects": [],
+        "questions_for_operator": [],
+    })
+
+    assert loopctl.load_portfolio_profile("newsletter") == {}
+    result = loopctl.write_morning_review(None)
+
+    profile = loopctl.load_portfolio_profile("newsletter")
+    assert profile["loop_readiness"] == "blocked_needs_loop_init"
+    assert result["plan"]["projects"][0]["decision"] == "init-loop"
+    assert result["plan"]["projects"][0]["can_init_loop_today"] is True
 
 
 def test_trading_read_only_profile_is_not_high_risk_by_default(monkeypatch, tmp_path):

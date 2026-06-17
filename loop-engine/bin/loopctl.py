@@ -4021,11 +4021,14 @@ def normalize_medium_envelope(raw: object, cfg: dict, row: dict, has_medium_task
 def normalize_pm_row(raw: dict, baseline: dict) -> dict:
     registered = bool(baseline.get("loop_registered")) or baseline["project"] in registry_data().get("projects", {})
     cfg = registry_project(baseline["project"]) if registered else {}
+    readiness = baseline.get("readiness") or ("executable" if registered else "portfolio_only")
     decision = str(raw.get("decision") or baseline.get("decision") or "plan-only").lower().strip()
-    if decision not in {"loop", "plan-only", "hold", "read-only", "blocked"}:
+    if decision not in {"loop", "init-loop", "plan-only", "hold", "read-only", "blocked"}:
         decision = "plan-only"
-    if not registered and decision == "loop":
-        decision = "blocked"
+    if decision == "loop" and not (registered and readiness == "executable"):
+        decision = "init-loop" if readiness == "blocked_needs_loop_init" else "blocked"
+    if decision == "init-loop" and readiness != "blocked_needs_loop_init":
+        decision = "loop" if registered and readiness == "executable" else "plan-only"
     raw_tasks = raw.get("tasks") if isinstance(raw.get("tasks"), list) else []
     tasks = [
         normalize_pm_task(task if isinstance(task, dict) else {}, index)
@@ -4055,7 +4058,7 @@ def normalize_pm_row(raw: dict, baseline: dict) -> dict:
     if row["top_risk"] not in {"low", "medium", "high"}:
         row["top_risk"] = top["risk"]
     row["portfolio"] = baseline.get("portfolio") or {}
-    row["readiness"] = baseline.get("readiness") or ("executable" if registered else "portfolio_only")
+    row["readiness"] = readiness
     row["portfolio_profile"] = baseline.get("portfolio_profile") or {}
     row["readiness_next_step"] = str(
         raw.get("readiness_next_step")
@@ -4066,6 +4069,11 @@ def normalize_pm_row(raw: dict, baseline: dict) -> dict:
         baseline.get("can_run_loop_today")
         if "can_run_loop_today" in baseline
         else (registered and row["readiness"] == "executable")
+    )
+    row["can_init_loop_today"] = bool(
+        baseline.get("can_init_loop_today")
+        if "can_init_loop_today" in baseline
+        else row["readiness"] == "blocked_needs_loop_init"
     )
     has_medium_task = registered and (any(task["risk"] == "medium" for task in tasks) or row["top_risk"] == "medium")
     row["medium_envelope"] = normalize_medium_envelope(raw.get("medium_envelope"), cfg, row, has_medium_task)
@@ -4213,11 +4221,12 @@ def portfolio_pm_row(entry: dict) -> dict:
         approval_path = "read-only PM/review work; live trading remains high-risk manual approval"
         category = "read_only_review"
     elif readiness == "blocked_needs_loop_init":
+        decision = "init-loop"
         task = "Prepare loop readiness: baseline artifact contract, trusted verification commands, and explicit loop init decision."
         benefit = "Turns a valuable known repo from portfolio-only into something the loop can safely execute later."
         value_score = 5
         risk = "medium"
-        approval_path = "requires explicit approval before loop init mutates the repo"
+        approval_path = "approve `loop approve <project> --init-loop`; rerun morning before execution"
         category = "readiness"
     elif readiness in {"identity_only", "pm_only_missing_local_path", "plan_only_missing_local_path"}:
         task = "Complete portfolio identity: add the missing project handle and define the product outcome."
@@ -4263,6 +4272,7 @@ def portfolio_pm_row(entry: dict) -> dict:
         "portfolio_profile": profile or {},
         "readiness_next_step": (profile.get("next_steps") or ["Run `loop portfolio intake`."])[0] if profile else "Run `loop portfolio intake`.",
         "can_run_loop_today": readiness == "executable",
+        "can_init_loop_today": readiness == "blocked_needs_loop_init",
         "loop_registered": False,
     }
 
@@ -4429,10 +4439,26 @@ def render_morning_review(rows: list[dict], summary: str = "", questions: list[s
         "",
         "- None yet. Use `loop approve <project>` after choosing today's work.",
         "",
+        "## Recommended Init-Loop Approvals",
+        "",
+    ])
+    init_rows = [row for row in rows if row.get("decision") == "init-loop"]
+    if init_rows:
+        for row in init_rows:
+            lines.append(
+                f"- `{display_text(row['project'])}`: approve readiness bootstrap with "
+                f"`loop approve {display_text(row['project'])} --init-loop`; then rerun `loop morning` before execution."
+            )
+    else:
+        lines.append("- None")
+    lines.extend([
+        "",
         "## Plan Only / Held",
         "",
     ])
     for row in rows:
+        if row.get("decision") == "init-loop":
+            continue
         lines.append(f"- `{display_text(row['project'])}`: awaiting explicit approval.")
     lines.extend([
         "",
@@ -4464,6 +4490,7 @@ def write_morning_review(projects: list[str] | None = None) -> dict:
             "Portfolio exists but no projects are enabled for daily review.",
             {"portfolio_path": str(portfolio_path())},
         )
+    refresh_portfolio_profiles(entries)
     baseline_rows: list[dict] = []
     snapshots: list[dict] = []
     for entry in entries:
@@ -4766,6 +4793,15 @@ def portfolio_intake_command(projects: list[str] | None = None, json_output: boo
             f"kind={profile['kind']} readiness={profile['loop_readiness']} stage={profile['current_stage']}"
         )
         print(f"PORTFOLIO_PROFILE {profile['profile_md']}")
+
+
+def refresh_portfolio_profiles(entries: list[dict]) -> list[dict]:
+    refreshed: list[dict] = []
+    for entry in entries:
+        profile = build_portfolio_profile(entry)
+        write_portfolio_profile(profile)
+        refreshed.append(profile)
+    return refreshed
 
 
 def portfolio_init_loop_project(project: str, provider: str | None = None) -> str:
