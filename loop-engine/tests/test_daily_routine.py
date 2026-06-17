@@ -58,6 +58,21 @@ def make_repo(tmp_path):
     return repo
 
 
+def make_plain_git_repo(tmp_path, name="plain"):
+    repo = tmp_path / name
+    repo.mkdir()
+    (repo / "README.md").write_text(f"# {name.title()}\n\nA useful product.\n")
+    (repo / "tests").mkdir()
+    (repo / "tests" / "test_smoke.py").write_text("def test_smoke():\n    assert True\n")
+    subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "initial"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "remote", "add", "origin", f"https://github.com/owner/{name}.git"], cwd=repo, check=True)
+    return repo
+
+
 def fake_pm_agent_plan(project="demo", envelope_name="primary-surface", envelope_commands=None):
     return {
         "date": loopctl.today_date(),
@@ -160,6 +175,14 @@ def test_facade_supports_doctor_and_init_provider(monkeypatch):
     assert loop_facade.main() == 0
     assert captured["cmd"][-5:] == ["portfolio", "add", "https://github.com/acme/app", "--mode", "plan-only"]
 
+    monkeypatch.setattr(sys, "argv", ["loop", "portfolio", "intake", "demo"])
+    assert loop_facade.main() == 0
+    assert captured["cmd"][-3:] == ["portfolio", "intake", "demo"]
+
+    monkeypatch.setattr(sys, "argv", ["loop", "approve", "newsletter", "--init-loop"])
+    assert loop_facade.main() == 0
+    assert captured["cmd"][-4:] == ["approve", "--init-loop", "--project", "newsletter"]
+
 
 def test_portfolio_add_accepts_multiple_handle_types(monkeypatch, tmp_path, capsys):
     repo = make_repo(tmp_path)
@@ -180,6 +203,114 @@ def test_portfolio_add_accepts_multiple_handle_types(monkeypatch, tmp_path, caps
     assert rows["app"]["github_repo"] == "acme/app"
     assert rows["content-pipeline"]["linear_project"] == "Content Pipeline"
     assert rows["content-pipeline"]["default_review"] is False
+
+
+def test_portfolio_intake_writes_cto_profile_for_local_repo(monkeypatch, tmp_path, capsys):
+    repo = make_plain_git_repo(tmp_path, "newsletter")
+    patch_engine(monkeypatch, tmp_path, make_repo(tmp_path))
+    loopctl.portfolio_add_command(None, "Newsletter", str(repo), "owner/newsletter", None, None, "plan-only", True)
+
+    loopctl.portfolio_intake_command(["newsletter"])
+
+    output = capsys.readouterr().out
+    assert "PORTFOLIO_INTAKE project=newsletter" in output
+    profile = loopctl.load_portfolio_profile("newsletter")
+    assert profile["project"] == "newsletter"
+    assert profile["loop_readiness"] == "blocked_needs_loop_init"
+    assert profile["verification_candidates"] == ["python3 -m pytest tests/"]
+    assert "missing_loop_contract" in profile["blockers"]
+    assert (tmp_path / "engine" / "portfolio" / "newsletter" / "profile.md").exists()
+
+
+def test_morning_review_surfaces_readiness_work_for_uninitialized_repo(monkeypatch, tmp_path):
+    registered = make_repo(tmp_path)
+    engine = patch_engine(monkeypatch, tmp_path, registered)
+    newsletter_repo = make_plain_git_repo(tmp_path, "newsletter")
+    loopctl.save_portfolio({
+        "version": 1,
+        "projects": {
+            "newsletter": {
+                "id": "newsletter",
+                "name": "Newsletter",
+                "mode": "plan-only",
+                "default_review": True,
+                "handles": {
+                    "local_path": str(newsletter_repo),
+                    "github_repo": "owner/newsletter",
+                },
+            },
+        },
+    })
+    loopctl.portfolio_intake_command(["newsletter"])
+    patch_pm_agent(monkeypatch, {
+        "date": loopctl.today_date(),
+        "summary": "Newsletter readiness is today's highest-value portfolio work.",
+        "projects": [],
+        "questions_for_operator": [],
+    })
+
+    result = loopctl.write_morning_review(None)
+
+    text = result["markdown"]
+    assert "Portfolio Readiness Board" in text
+    assert "Prepare loop readiness" in text
+    row = result["plan"]["projects"][0]
+    assert row["project"] == "newsletter"
+    assert row["tasks"][0]["value_score"] == 5
+    assert row["tasks"][0]["risk"] == "medium"
+    assert row["decision"] == "plan-only"
+    snapshot = json.loads(result["paths"]["snapshot"].read_text())
+    assert snapshot["projects"][0]["portfolio_profile"]["loop_readiness"] == "blocked_needs_loop_init"
+    assert engine.exists()
+
+
+def test_trading_read_only_profile_is_not_high_risk_by_default(monkeypatch, tmp_path):
+    repo = make_plain_git_repo(tmp_path, "gold-trading")
+    patch_engine(monkeypatch, tmp_path, make_repo(tmp_path))
+    loopctl.portfolio_add_command(None, "Gold Trading", str(repo), "owner/gold-trading", None, None, "read-only", True)
+    loopctl.portfolio_intake_command(["gold-trading"])
+
+    entry = (loopctl.load_portfolio()["projects"])["gold-trading"]
+    row = loopctl.portfolio_pm_row(entry)
+
+    assert row["tasks"][0]["risk"] == "low"
+    assert "read-only trading gate review" in row["tasks"][0]["task"]
+    profile = loopctl.load_portfolio_profile("gold-trading")
+    assert "live order submission" in profile["risk_boundaries"]["high"]
+    assert "backtest/report analysis" in " ".join(profile["risk_boundaries"]["low"])
+
+
+def test_approve_init_loop_bootstraps_portfolio_project(monkeypatch, tmp_path):
+    repo = make_plain_git_repo(tmp_path, "newsletter")
+    patch_engine(monkeypatch, tmp_path, make_repo(tmp_path))
+    loopctl.portfolio_add_command(None, "Newsletter", str(repo), "owner/newsletter", None, None, "plan-only", True)
+    called = {}
+
+    def fake_bootstrap(path):
+        called["path"] = path
+        registry = loopctl.registry_data()
+        registry.setdefault("projects", {})["newsletter"] = {
+            "name": "Newsletter",
+            "repo_path": str(repo),
+            "github_repo": "owner/newsletter",
+            "pilot_branch": "loop/newsletter-pilot",
+            "contract_path": str(repo / ".loop" / "contract.yaml"),
+            "verification_commands": ["python3 -m pytest tests/"],
+            "auto_approval": {"blocked_categories": [], "max_tasks_per_cycle": 1},
+        }
+        loopctl.save_registry(registry)
+        return "newsletter"
+
+    monkeypatch.setattr(loopctl, "bootstrap_project", fake_bootstrap)
+
+    loopctl.approve_command("newsletter", repo, None, [], [], init_loop=True)
+
+    assert called["path"] == repo
+    saved = loopctl.load_portfolio()["projects"]["newsletter"]
+    assert saved["mode"] == "loop"
+    assert saved["handles"]["loop_project_id"] == "newsletter"
+    approvals = loopctl.load_latest_approvals()
+    assert approvals["approved"]["newsletter"]["readiness_action"] == "init_loop"
 
 
 def test_morning_without_portfolio_requires_onboarding(monkeypatch, tmp_path):

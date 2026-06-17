@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "project": "newsletter",
+  "name": "Newsletter",
+  "updated_at": "2026-06-17T09:00:00",
+  "kind": "newsletter",
+  "end_goal": "Produce a reliable daily brief and deep-read artifact from collected sources.",
+  "primary_user_or_operator": "operator",
+  "primary_artifact": "README.md",
+  "known_artifacts": ["README.md", "src/", "tests/"],
+  "current_stage": "repo-known-ready-for-loop-init",
+  "current_progress": {
+    "readiness": "blocked_needs_loop_init",
+    "git_status": "clean",
+    "has_loop_contract": false,
+    "top_level_entries": ["README.md", "src/", "tests/"]
+  },
+  "verification_candidates": ["python3 -m pytest tests/"],
+  "loop_readiness": "blocked_needs_loop_init",
+  "blockers": ["blocked_needs_loop_init", "missing_loop_contract"],
+  "next_steps": [
+    "Define the primary artifact contract and accepted before/after evidence.",
+    "Confirm trusted verification commands, starting with: python3 -m pytest tests/.",
+    "After approval, run `loop approve newsletter --init-loop` or run `loop init` from the repo."
+  ],
+  "risk_boundaries": {
+    "low": ["docs, tests, status/report clarity, deterministic validation"],
+    "medium": ["visible local product-surface behavior", "loop init / contract bootstrapping for a known clean repo"],
+    "high": ["credentials or external auth", "deployment/publishing", "destructive operations"]
+  }
+}

@@ -95,7 +95,9 @@ def load_json(path: Path) -> dict:
 
 def write_json(path: Path, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+    tmp.replace(path)
 
 
 def load_config() -> dict:
@@ -896,7 +898,7 @@ risk_policy:
     - launchd, cron, or scheduler installation changes
     - destructive file operations
     - network publishing
-    - money, trading, or payment behavior
+    - broker credentials, live broker orders, real-money movement, payment execution, or live trading config changes
     - broad architecture rewrites
 
 allowed_low_risk_work:
@@ -904,6 +906,7 @@ allowed_low_risk_work:
   - tests for the selected product behavior
   - README or docs that clarify the actual user or operator workflow
   - deterministic parsing, validation, or observability that unlocks user value
+  - read-only trading analysis, backtest/report interpretation, or data-quality checks that do not touch live broker paths
   - small internal refactors only when needed for the selected behavior and covered by tests
 
 verification:
@@ -1225,8 +1228,10 @@ def portfolio_project_readiness(entry: dict) -> str:
 
 def portfolio_entry_to_row(entry: dict) -> dict:
     handles = entry.get("handles") or {}
+    project = entry.get("id") or portfolio_entry_id(entry)
+    profile = load_portfolio_profile(str(project))
     return {
-        "project": entry.get("id") or portfolio_entry_id(entry),
+        "project": project,
         "name": entry.get("name") or portfolio_entry_id(entry),
         "mode": entry.get("mode") or "plan-only",
         "default_review": bool(entry.get("default_review", True)),
@@ -1236,6 +1241,7 @@ def portfolio_entry_to_row(entry: dict) -> dict:
         "url": handles.get("url") or "-",
         "loop_project_id": handles.get("loop_project_id") or "-",
         "readiness": portfolio_project_readiness(entry),
+        "profile_status": "present" if profile else "missing",
     }
 
 
@@ -1306,6 +1312,342 @@ def ensure_portfolio_for_morning(projects: list[str] | None) -> None:
             "portfolio_path": str(portfolio_path()),
         },
     )
+
+
+def portfolio_profiles_dir() -> Path:
+    return ENGINE_ROOT / "portfolio"
+
+
+def portfolio_profile_paths(project: str) -> dict[str, Path]:
+    base = portfolio_profiles_dir() / slugify_project_id(project)
+    return {
+        "dir": base,
+        "json": base / "profile.json",
+        "md": base / "profile.md",
+    }
+
+
+def load_portfolio_profile(project: str) -> dict:
+    path = portfolio_profile_paths(project)["json"]
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text())
+    except json.JSONDecodeError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def repo_top_level_entries(repo_path: Path, limit: int = 24) -> list[str]:
+    if not repo_path.exists():
+        return []
+    try:
+        entries = sorted(
+            item.name + ("/" if item.is_dir() else "")
+            for item in repo_path.iterdir()
+            if item.name not in {".git", "__pycache__", ".pytest_cache", ".DS_Store"}
+        )
+    except OSError:
+        return []
+    return entries[:limit]
+
+
+def readme_title_or_goal(readme: str, fallback: str) -> str:
+    for line in readme.splitlines():
+        text = line.strip()
+        if text.startswith("#"):
+            return text.lstrip("#").strip() or fallback
+    for line in readme.splitlines():
+        text = line.strip()
+        if text:
+            return text[:220]
+    return fallback
+
+
+def project_kind(entry: dict, row: dict) -> str:
+    text = " ".join(
+        str(value)
+        for value in [
+            entry.get("id"),
+            entry.get("name"),
+            row.get("github_repo"),
+            row.get("local_path"),
+            row.get("url"),
+        ]
+        if value and value != "-"
+    ).lower()
+    if any(token in text for token in ("trading", "trade", "gold", "broker", "quant")):
+        return "trading"
+    if any(token in text for token in ("video", "remotion", "media", "clip")):
+        return "video"
+    if any(token in text for token in ("newsletter", "digest", "inbox", "content")):
+        return "newsletter"
+    return "product"
+
+
+def primary_artifact_candidates(repo_path: Path, kind: str) -> list[str]:
+    if not repo_path.exists():
+        return []
+    candidates: list[str] = []
+    for rel in [
+        "README.md",
+        "AGENTS.md",
+        "docs/",
+        "web/",
+        "app/",
+        "src/",
+        "tests/",
+        "outputs/",
+        "reports/",
+        "remotion/",
+        "compositions/",
+    ]:
+        if (repo_path / rel.rstrip("/")).exists():
+            candidates.append(rel)
+    if kind == "newsletter":
+        for rel in ("out/", "output/", "digest/", "rendered/", "artifacts/"):
+            if (repo_path / rel.rstrip("/")).exists() and rel not in candidates:
+                candidates.append(rel)
+    if kind == "trading":
+        for rel in ("outputs/", "reports/", "configs/", "strategies/", "backtests/"):
+            if (repo_path / rel.rstrip("/")).exists() and rel not in candidates:
+                candidates.append(rel)
+    return candidates[:10]
+
+
+def profile_stage(readiness: str, kind: str, git_status: str, has_contract: bool) -> str:
+    if readiness == "executable":
+        return "loop-ready"
+    if readiness == "blocked_needs_loop_init":
+        if git_status and git_status != "clean":
+            return "repo-known-needs-baseline-reconciliation"
+        return "repo-known-ready-for-loop-init"
+    if readiness in {"plan_only_missing_local_path", "pm_only_missing_local_path", "identity_only"}:
+        return "portfolio-identity-needs-handles"
+    if kind == "trading":
+        return "read-only-evidence-review"
+    return "planning"
+
+
+def risk_boundaries_for_kind(kind: str) -> dict:
+    if kind == "trading":
+        return {
+            "low": [
+                "read-only gate review",
+                "backtest/report analysis that does not touch broker credentials or live config",
+                "data-quality checks and documentation",
+            ],
+            "medium": [
+                "offline strategy refactor with tests",
+                "paper/demo simulation changes with no broker or real-money path",
+            ],
+            "high": [
+                "broker credentials or auth",
+                "live order submission",
+                "real-money movement",
+                "live trading config flip",
+                "scheduler that could place trades unattended",
+            ],
+        }
+    return {
+        "low": [
+            "docs, tests, status/report clarity, deterministic validation",
+            "read-only analysis and artifact review",
+        ],
+        "medium": [
+            "visible local product-surface behavior",
+            "bounded schema/payload changes with tests",
+            "loop init / contract bootstrapping for a known clean repo",
+        ],
+        "high": [
+            "credentials or external auth",
+            "deployment/publishing",
+            "launchd/cron/scheduler installation",
+            "destructive operations",
+            "real-money movement",
+            "cross-project permission expansion",
+        ],
+    }
+
+
+def next_steps_for_profile(entry: dict, readiness: str, kind: str, git_status: str, verification: list[str]) -> list[str]:
+    name = str(entry.get("name") or entry.get("id") or "project")
+    if readiness == "executable":
+        return [
+            "Run daily PM review and approve only the highest-value focus for today.",
+            "Use the project contract and trusted verification commands to bound execution.",
+            "Stop when the daily success criterion is met; do not scrape for low-value work.",
+        ]
+    if readiness == "blocked_needs_loop_init":
+        steps = [
+            "Reconcile the current git baseline if the worktree is dirty.",
+            "Define the primary artifact contract and accepted before/after evidence.",
+            "Confirm trusted verification commands before loop init.",
+            f"After approval, run `loop approve {slugify_project_id(name)} --init-loop` or run `loop init` from the repo.",
+        ]
+        if verification:
+            steps[2] = f"Confirm trusted verification commands, starting with: {'; '.join(verification)}."
+        return steps
+    if kind == "trading":
+        return [
+            "Keep work read-only unless Wendy explicitly approves a bounded paper/offline task.",
+            "Produce ALLOW, DENY, or NO_TRADE with artifact evidence before any config change.",
+            "Treat broker credentials, live orders, and real-money movement as high risk every time.",
+        ]
+    if readiness in {"identity_only", "pm_only_missing_local_path", "plan_only_missing_local_path"}:
+        return [
+            "Add at least one concrete handle: local path, GitHub repo, Linear project, or URL.",
+            "Clarify the end goal and primary user/operator.",
+            "Decide whether this should become executable, read-only, plan-only, or held.",
+        ]
+    return [
+        "Clarify the primary artifact and verification command.",
+        "Decide whether to initialize loop for this repo.",
+    ]
+
+
+def build_portfolio_profile(entry: dict) -> dict:
+    row = portfolio_entry_to_row(entry)
+    project = row["project"]
+    name = row["name"]
+    readiness = row["readiness"]
+    kind = project_kind(entry, row)
+    local_path = row.get("local_path")
+    repo_path = Path(local_path).expanduser() if local_path and local_path != "-" else None
+    repo_exists = bool(repo_path and repo_path.exists())
+    git_root_path = git_root(repo_path) if repo_exists and repo_path else None
+    if git_root_path:
+        repo_path = git_root_path
+    readme = safe_repo_file_snapshot(repo_path, "README.md", max_chars=5000) if repo_path and repo_path.exists() else ""
+    git_status = safe_git_status(repo_path) if repo_path and repo_path.exists() else "no local repo"
+    has_contract = bool(repo_path and (repo_path / ".loop" / "contract.yaml").exists())
+    verification = detect_verification_commands(repo_path) if repo_path and git_root_path else []
+    artifacts = primary_artifact_candidates(repo_path, kind) if repo_path else []
+    end_goal = readme_title_or_goal(readme, f"Clarify the end goal for {name}.")
+    stage = profile_stage(readiness, kind, git_status, has_contract)
+    blockers: list[str] = []
+    if readiness != "executable":
+        blockers.append(readiness)
+    if repo_path and git_root_path and git_status != "clean":
+        blockers.append("dirty_worktree")
+    if repo_path and git_root_path and not has_contract:
+        blockers.append("missing_loop_contract")
+    if not verification and git_root_path:
+        blockers.append("missing_verification_command")
+    if not repo_path:
+        blockers.append("missing_local_path")
+    profile = {
+        "version": 1,
+        "project": project,
+        "name": name,
+        "updated_at": now_iso(),
+        "kind": kind,
+        "end_goal": end_goal,
+        "primary_user_or_operator": "operator",
+        "primary_artifact": artifacts[0] if artifacts else "to_be_defined",
+        "known_artifacts": artifacts,
+        "current_stage": stage,
+        "current_progress": {
+            "readiness": readiness,
+            "git_status": git_status,
+            "has_loop_contract": has_contract,
+            "top_level_entries": repo_top_level_entries(repo_path) if repo_path else [],
+        },
+        "verification_candidates": verification,
+        "loop_readiness": readiness,
+        "blockers": blockers,
+        "next_steps": next_steps_for_profile(entry, readiness, kind, git_status, verification),
+        "risk_boundaries": risk_boundaries_for_kind(kind),
+        "portfolio": row,
+    }
+    return profile
+
+
+def render_portfolio_profile(profile: dict) -> str:
+    lines = [
+        f"# Portfolio Profile: {profile.get('name') or profile.get('project')}",
+        "",
+        f"- project: `{profile.get('project')}`",
+        f"- kind: `{profile.get('kind')}`",
+        f"- updated_at: `{profile.get('updated_at')}`",
+        f"- loop_readiness: `{profile.get('loop_readiness')}`",
+        f"- current_stage: `{profile.get('current_stage')}`",
+        "",
+        "## End Goal",
+        "",
+        str(profile.get("end_goal") or "Clarify the end goal."),
+        "",
+        "## Primary Artifact",
+        "",
+        f"- primary: `{profile.get('primary_artifact')}`",
+    ]
+    for artifact in profile.get("known_artifacts") or []:
+        lines.append(f"- candidate: `{artifact}`")
+    lines.extend([
+        "",
+        "## Current Progress",
+        "",
+    ])
+    progress = profile.get("current_progress") or {}
+    lines.append(f"- git_status: `{progress.get('git_status')}`")
+    lines.append(f"- has_loop_contract: `{progress.get('has_loop_contract')}`")
+    entries = progress.get("top_level_entries") or []
+    if entries:
+        lines.append(f"- top_level_entries: {', '.join(f'`{item}`' for item in entries)}")
+    lines.extend([
+        "",
+        "## Verification Candidates",
+        "",
+    ])
+    for command in profile.get("verification_candidates") or []:
+        lines.append(f"- `{command}`")
+    if not (profile.get("verification_candidates") or []):
+        lines.append("- none detected")
+    lines.extend([
+        "",
+        "## Blockers",
+        "",
+    ])
+    blockers = profile.get("blockers") or []
+    lines.extend(f"- `{blocker}`" for blocker in blockers) if blockers else lines.append("- none")
+    lines.extend([
+        "",
+        "## Next Steps",
+        "",
+    ])
+    lines.extend(f"- {step}" for step in profile.get("next_steps") or [])
+    lines.extend([
+        "",
+        "## Risk Boundaries",
+        "",
+    ])
+    for risk in ("low", "medium", "high"):
+        lines.append(f"### {risk}")
+        for item in (profile.get("risk_boundaries") or {}).get(risk) or []:
+            lines.append(f"- {item}")
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def write_portfolio_profile(profile: dict) -> dict[str, Path]:
+    paths = portfolio_profile_paths(str(profile["project"]))
+    paths["dir"].mkdir(parents=True, exist_ok=True)
+    write_json(paths["json"], profile)
+    paths["md"].write_text(render_portfolio_profile(profile))
+    return paths
+
+
+def intake_entries(projects: list[str] | None = None) -> list[dict]:
+    if projects:
+        return portfolio_entries(projects)
+    entries = list((load_portfolio().get("projects") or {}).values())
+    if not entries:
+        raise LoopBlocked(
+            "portfolio_missing",
+            "No portfolio registry found. Add projects before portfolio intake.",
+            {"next_actions": ["loop portfolio init", "loop portfolio add /path/to/project"]},
+        )
+    return entries
 
 
 # --- safety enforcement -------------------------------------------------------
@@ -3463,6 +3805,7 @@ def project_pm_snapshot(project: str, baseline_row: dict) -> dict:
     cfg = registry_project(project)
     repo_path = Path(cfg.get("repo_path") or "")
     payload = status_payload(project)
+    profile = load_portfolio_profile(project)
     return {
         "project": project,
         "name": cfg.get("name") or project,
@@ -3484,6 +3827,7 @@ def project_pm_snapshot(project: str, baseline_row: dict) -> dict:
         "baseline_pm_row": baseline_row,
         "portfolio": baseline_row.get("portfolio") or {},
         "readiness": baseline_row.get("readiness") or "executable",
+        "portfolio_profile": profile or {"status": "missing", "next_step": "Run `loop portfolio intake`."},
     }
 
 
@@ -3638,6 +3982,17 @@ def normalize_pm_row(raw: dict, baseline: dict) -> dict:
         row["top_risk"] = top["risk"]
     row["portfolio"] = baseline.get("portfolio") or {}
     row["readiness"] = baseline.get("readiness") or ("executable" if registered else "portfolio_only")
+    row["portfolio_profile"] = baseline.get("portfolio_profile") or {}
+    row["readiness_next_step"] = str(
+        raw.get("readiness_next_step")
+        or baseline.get("readiness_next_step")
+        or (row["portfolio_profile"].get("next_steps") or ["Run `loop portfolio intake`."])[0]
+    )
+    row["can_run_loop_today"] = bool(
+        baseline.get("can_run_loop_today")
+        if "can_run_loop_today" in baseline
+        else (registered and row["readiness"] == "executable")
+    )
     has_medium_task = registered and (any(task["risk"] == "medium" for task in tasks) or row["top_risk"] == "medium")
     row["medium_envelope"] = normalize_medium_envelope(raw.get("medium_envelope"), cfg, row, has_medium_task)
     if has_medium_task and not row["medium_risk_question"]:
@@ -3744,6 +4099,7 @@ def project_pm_row(project: str) -> dict:
     recent_runs = today_project_runs(project)
     recommended_cycles = 1 if top["risk"] == "high" else 2
     decision = "plan-only"
+    profile = load_portfolio_profile(project)
     return {
         "project": project,
         "name": cfg.get("name") or project,
@@ -3759,6 +4115,9 @@ def project_pm_row(project: str) -> dict:
         "stop_condition": "Stop when the selected user-visible benefit is shipped, or when no candidate clears the value line.",
         "value_threshold": 3,
         "tasks": tasks,
+        "portfolio_profile": profile or {},
+        "readiness_next_step": "Ready for daily approval and bounded execution.",
+        "can_run_loop_today": True,
         "loop_registered": True,
     }
 
@@ -3767,21 +4126,47 @@ def portfolio_pm_row(entry: dict) -> dict:
     row = portfolio_entry_to_row(entry)
     readiness = row["readiness"]
     mode = normalize_portfolio_mode(str(row.get("mode") or "plan-only"))
-    decision = mode if mode in {"plan-only", "read-only", "hold"} else "blocked"
+    profile = load_portfolio_profile(str(row["project"]))
+    decision = mode if mode in {"plan-only", "read-only", "hold"} else "plan-only"
     if readiness == "executable" and mode == "loop":
         decision = "loop"
-    elif readiness.startswith("blocked"):
-        decision = "blocked"
-    task = "Clarify today's highest-value product outcome and complete missing execution links."
-    benefit = "Keeps the project visible in the portfolio without pretending it is ready for autonomous execution."
+    kind = str(profile.get("kind") or project_kind(entry, row))
+    if kind == "trading" and mode == "read-only":
+        task = "Produce a read-only trading gate review with ALLOW, DENY, or NO_TRADE and artifact evidence."
+        benefit = "Keeps trading work active without touching broker credentials, live config, or real orders."
+        value_score = 4
+        risk = "low"
+        approval_path = "read-only PM/review work; live trading remains high-risk manual approval"
+        category = "read_only_review"
+    elif readiness == "blocked_needs_loop_init":
+        task = "Prepare loop readiness: baseline artifact contract, trusted verification commands, and explicit loop init decision."
+        benefit = "Turns a valuable known repo from portfolio-only into something the loop can safely execute later."
+        value_score = 5
+        risk = "medium"
+        approval_path = "requires explicit approval before loop init mutates the repo"
+        category = "readiness"
+    elif readiness in {"identity_only", "pm_only_missing_local_path", "plan_only_missing_local_path"}:
+        task = "Complete portfolio identity: add the missing project handle and define the product outcome."
+        benefit = "Prevents the portfolio from hiding a potentially valuable project behind missing metadata."
+        value_score = 3
+        risk = "low"
+        approval_path = "PM review only"
+        category = "portfolio_readiness"
+    else:
+        task = "Clarify today's highest-value product outcome and complete missing execution links."
+        benefit = "Keeps the project visible in the portfolio without pretending it is ready for autonomous execution."
+        value_score = 3
+        risk = "low"
+        approval_path = "PM review only; execution blocked until portfolio links are complete"
+        category = "portfolio_readiness"
     tasks = [{
         "rank": 1,
         "task": task,
-        "value_score": 3,
-        "risk": "low",
-        "approval_path": "PM review only; execution blocked until portfolio links are complete",
+        "value_score": value_score,
+        "risk": risk,
+        "approval_path": approval_path,
         "benefit": benefit,
-        "category": "portfolio_readiness",
+        "category": category,
         "surface": "portfolio",
     }]
     return {
@@ -3790,17 +4175,20 @@ def portfolio_pm_row(entry: dict) -> dict:
         "decision": decision,
         "today_focus": task,
         "top_value_task": task,
-        "top_risk": "low",
-        "approval_needed": "complete local/GitHub/Linear links before execution" if decision == "blocked" else "PM review only",
+        "top_risk": risk,
+        "approval_needed": approval_path,
         "user_benefit": benefit,
-        "success_criteria": "Portfolio entry is verified and any missing local/GitHub/Linear link is either filled or intentionally deferred.",
+        "success_criteria": "Portfolio entry has a current CTO profile and any missing local/GitHub/Linear/loop-init link is either filled or intentionally deferred.",
         "reason": f"mode={mode} readiness={readiness}",
         "recommended_cycles": 0,
-        "stop_condition": "Do not run execution loop until the portfolio entry is executable.",
+        "stop_condition": "Do not run execution loop until the portfolio entry is executable; readiness work can still be today's highest-value work.",
         "value_threshold": 3,
         "tasks": tasks,
         "portfolio": row,
         "readiness": readiness,
+        "portfolio_profile": profile or {},
+        "readiness_next_step": (profile.get("next_steps") or ["Run `loop portfolio intake`."])[0] if profile else "Run `loop portfolio intake`.",
+        "can_run_loop_today": readiness == "executable",
         "loop_registered": False,
     }
 
@@ -3824,6 +4212,10 @@ def portfolio_pm_snapshot(entry: dict, baseline_row: dict) -> dict:
         "status": {"loop_status": "not_registered"},
         "recent_runs_today": [],
         "baseline_pm_row": baseline_row,
+        "portfolio_profile": baseline_row.get("portfolio_profile") or load_portfolio_profile(baseline_row["project"]) or {
+            "status": "missing",
+            "next_step": "Run `loop portfolio intake`.",
+        },
     }
 
 
@@ -3860,6 +4252,26 @@ def render_morning_review(rows: list[dict], summary: str = "", questions: list[s
             f"{display_text(portfolio.get('github_repo') or '-')} | "
             f"{display_text(portfolio.get('linear_project') or '-')} | "
             f"{display_text(portfolio.get('url') or '-')} |"
+        )
+    lines.extend([
+        "",
+        "## Portfolio Readiness Board",
+        "",
+        "| Project | Readiness | Profile | Highest-Value Readiness Work | Can Run Loop Today | Missing / Next Step |",
+        "| --- | --- | --- | --- | --- | --- |",
+    ])
+    for row in rows:
+        portfolio = row.get("portfolio") or {}
+        profile = row.get("portfolio_profile") or {}
+        profile_status = "present" if profile else portfolio.get("profile_status") or "missing"
+        readiness_work = row["tasks"][0]["task"]
+        lines.append(
+            f"| {display_text(row['project'])} | "
+            f"{display_text(row.get('readiness') or '-')} | "
+            f"{display_text(profile_status)} | "
+            f"{display_text(readiness_work, max_chars=180)} | "
+            f"{display_text('yes' if row.get('can_run_loop_today') else 'no')} | "
+            f"{display_text(row.get('readiness_next_step') or '-', max_chars=180)} |"
         )
     lines.extend([
         "",
@@ -4252,8 +4664,74 @@ def portfolio_status_command(json_output: bool = False) -> None:
         print(
             f"PORTFOLIO_PROJECT {row['project']} mode={row['mode']} "
             f"review={str(row['default_review']).lower()} readiness={row['readiness']} "
-            f"path={row['local_path']} github={row['github_repo']} linear={row['linear_project']}"
+                f"path={row['local_path']} github={row['github_repo']} linear={row['linear_project']}"
         )
+
+
+def portfolio_intake_command(projects: list[str] | None = None, json_output: bool = False) -> None:
+    profiles: list[dict] = []
+    for entry in intake_entries(projects):
+        profile = build_portfolio_profile(entry)
+        paths = write_portfolio_profile(profile)
+        profiles.append({
+            "project": profile["project"],
+            "name": profile["name"],
+            "kind": profile["kind"],
+            "loop_readiness": profile["loop_readiness"],
+            "current_stage": profile["current_stage"],
+            "profile_json": str(paths["json"]),
+            "profile_md": str(paths["md"]),
+            "next_steps": profile.get("next_steps") or [],
+        })
+    if json_output:
+        print(json.dumps({"profiles": profiles}, indent=2, ensure_ascii=False))
+        return
+    for profile in profiles:
+        print(
+            f"PORTFOLIO_INTAKE project={profile['project']} "
+            f"kind={profile['kind']} readiness={profile['loop_readiness']} stage={profile['current_stage']}"
+        )
+        print(f"PORTFOLIO_PROFILE {profile['profile_md']}")
+
+
+def portfolio_init_loop_project(project: str, provider: str | None = None) -> str:
+    entries = load_portfolio().get("projects") or {}
+    entry = entries.get(project)
+    if not entry:
+        raise LoopBlocked(
+            "portfolio_project_not_found",
+            f"Portfolio project {project!r} not found.",
+            {"portfolio_path": str(portfolio_path())},
+        )
+    handles = entry.get("handles") or {}
+    local_path = handles.get("local_path")
+    if not local_path:
+        raise LoopBlocked("missing_local_path", f"Portfolio project {project!r} has no local path.")
+    repo = git_root(Path(str(local_path)).expanduser())
+    if repo is None:
+        raise LoopBlocked("not_git_repo", f"Portfolio project {project!r} local path is not a git repo.")
+    old_provider = os.environ.get("LOOP_DEFAULT_PROVIDER")
+    try:
+        if provider:
+            os.environ["LOOP_DEFAULT_PROVIDER"] = provider
+        initialized = bootstrap_project(repo)
+    finally:
+        if provider:
+            if old_provider is None:
+                os.environ.pop("LOOP_DEFAULT_PROVIDER", None)
+            else:
+                os.environ["LOOP_DEFAULT_PROVIDER"] = old_provider
+    cfg = registry_project(initialized)
+    saved = upsert_portfolio_entry(infer_portfolio_entry(
+        name=cfg.get("name") or entry.get("name") or initialized,
+        local_path=cfg.get("repo_path"),
+        github_repo=cfg.get("github_repo"),
+        linear_project=cfg.get("linear_project"),
+        mode="loop",
+    ))
+    profile = build_portfolio_profile(saved)
+    write_portfolio_profile(profile)
+    return initialized
 
 
 def portfolio_command(args: argparse.Namespace) -> None:
@@ -4272,6 +4750,11 @@ def portfolio_command(args: argparse.Namespace) -> None:
         )
     elif args.portfolio_command == "status":
         portfolio_status_command(json_output=args.json)
+    elif args.portfolio_command == "intake":
+        portfolio_intake_command(args.project or None, json_output=args.json)
+    elif args.portfolio_command == "init-loop":
+        initialized = portfolio_init_loop_project(args.project, provider=args.provider)
+        print(f"PORTFOLIO_INIT_LOOP project={initialized}")
 
 
 def setup_command(
@@ -4350,8 +4833,29 @@ def approve_command(
     allowed_files: list[str],
     verification_commands: list[str],
     approve_medium: bool = False,
+    init_loop: bool = False,
     start_after: bool = False,
 ) -> None:
+    if init_loop:
+        if not project:
+            raise LoopBlocked(
+                "missing_project",
+                "`loop approve --init-loop` requires a portfolio project id.",
+            )
+        initialized = portfolio_init_loop_project(project)
+        approvals = load_latest_approvals()
+        approvals.setdefault("approved", {})[initialized] = {
+            "approved_at": now_iso(),
+            "project": initialized,
+            "readiness_action": "init_loop",
+            "medium_envelope": None,
+            "medium_auto_approved_for_day": False,
+        }
+        approvals.setdefault("rejected", {}).pop(initialized, None)
+        write_approvals(approvals)
+        print(f"LOOP_INIT_APPROVED project={initialized}")
+        print("LOOP_INIT_READY run `loop morning` again before starting execution.")
+        return
     resolved = resolve_project(cwd, project=project, bootstrap=False)
     cfg = registry_project(resolved)
     medium_envelope = None
@@ -5414,6 +5918,12 @@ def main() -> int:
     portfolio_add.add_argument("--no-review", action="store_true")
     portfolio_status = portfolio_sub.add_parser("status")
     portfolio_status.add_argument("--json", action="store_true")
+    portfolio_intake = portfolio_sub.add_parser("intake")
+    portfolio_intake.add_argument("project", nargs="*")
+    portfolio_intake.add_argument("--json", action="store_true")
+    portfolio_init_loop = portfolio_sub.add_parser("init-loop")
+    portfolio_init_loop.add_argument("project")
+    portfolio_init_loop.add_argument("--provider", choices=["codex", "claude"])
     morning_parser = sub.add_parser("morning")
     morning_parser.add_argument("--project", action="append")
     morning_parser.add_argument("--start", action="store_true")
@@ -5421,6 +5931,7 @@ def main() -> int:
     approve_parser.add_argument("--project")
     approve_parser.add_argument("--approve-medium", action="store_true")
     approve_parser.add_argument("--medium-envelope")
+    approve_parser.add_argument("--init-loop", action="store_true")
     approve_parser.add_argument("--allowed-file", action="append", default=[])
     approve_parser.add_argument("--verification-command", action="append", default=[])
     approve_parser.add_argument("--start", action="store_true")
@@ -5506,6 +6017,7 @@ def main() -> int:
                 args.allowed_file,
                 args.verification_command,
                 approve_medium=args.approve_medium,
+                init_loop=args.init_loop,
                 start_after=args.start,
             )
         elif args.command == "reject":

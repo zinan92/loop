@@ -111,6 +111,7 @@ loop portfolio add /path/to/your-product-repo
 loop portfolio add https://github.com/owner/repo --mode plan-only
 loop portfolio add --linear-project "Newsletter" --mode hold
 loop portfolio status             # private source of truth for daily PM review
+loop portfolio intake             # CTO catch-up: writes portfolio/<project>/profile.{md,json}
 
 # 5) Initialize executable product repos (run from INSIDE each local Git repo)
 cd /path/to/your-product-repo        # must be a clean git repo with a GitHub origin
@@ -175,12 +176,15 @@ By default **only the top-ranked auto-runnable task executes per cycle** (`max_t
    - Linear project: `loop portfolio add --linear-project "Project Name"`
    - plain product name or URL for early ideas
 3. `loop init` also upserts the current repo into the portfolio as an executable `loop` project.
+4. `loop portfolio intake [project...]` performs the CTO catch-up pass for each portfolio entry: where the project lives, what it appears to be building, current stage/progress, primary artifact candidates, verification candidates, loop readiness, blockers, next steps, and task-level risk boundaries. It writes:
+   - `loop-engine/portfolio/<project>/profile.md`
+   - `loop-engine/portfolio/<project>/profile.json`
 
 **Daily portfolio verification — shown every morning, not asked from scratch:**
-`loop morning` refuses to run with no portfolio (`LOOP_BLOCKED reason=portfolio_missing`). Once the registry exists, every daily review begins with a **Portfolio Registry Verification** table showing project, mode, review flag, readiness, local path, GitHub, Linear, and URL. The operator should verify this is the full portfolio before approving loops. Missing or non-executable entries stay visible as `plan-only`, `read-only`, `hold`, or `blocked`; they are not silently ignored.
+`loop morning` refuses to run with no portfolio (`LOOP_BLOCKED reason=portfolio_missing`). Once the registry exists, every daily review begins with a **Portfolio Registry Verification** table showing project, mode, review flag, readiness, local path, GitHub, Linear, and URL. It also shows a **Portfolio Readiness Board** so high-value readiness work does not get hidden behind "not initialized yet." The operator should verify this is the full portfolio before approving loops. Missing or non-executable entries stay visible as `plan-only`, `read-only`, `hold`, or `blocked`; they are not silently ignored.
 
 **Morning — decide value, then approve:**
-1. `loop morning [project...]` runs the built-in PM Review Agent over the portfolio registry plus registered project snapshots, reads current loop state/digests/evening scorecards, ranks value-first work, assigns low/medium/high risk, and writes:
+1. `loop morning [project...]` runs the built-in PM Review Agent over the portfolio registry, intake profiles, and registered project snapshots, reads current loop state/digests/evening scorecards, ranks value-first work, assigns low/medium/high risk, and writes:
    - `loop-engine/pm-reviews/YYYY-MM-DD.md`
    - `loop-engine/pm-reviews/latest.md`
    - `loop-engine/pm-reviews/YYYY-MM-DD.json`
@@ -193,6 +197,7 @@ By default **only the top-ranked auto-runnable task executes per cycle** (`max_t
    - recommended: `loop approve <project> --approve-medium`
    - `loop approve <project> --medium-envelope <name> --allowed-file ... --verification-command ...`
    - PM-recommended verification commands are clipped to the project's trusted `verification_commands`; untrusted suggestions are shown in the morning review but are not written into the approved envelope.
+4. Readiness work can be the highest-value work. If an important repo is not loop-ready, morning review may recommend defining its artifact contract, verification commands, and baseline, or explicitly approving loop init with `loop approve <project> --init-loop`. That command mutates the repo by running loop bootstrap, then asks you to run morning review again before execution.
 
 **Day — execute only approved work:**
 1. `loop start-day [project...]` starts approved projects only.
@@ -223,9 +228,11 @@ In short: PM skills are strongly recommended power-ups, not runtime dependencies
 
 ## Risk model / 风险模型
 
-- **Low-risk** (tests, docs, CLI/digest wording, deterministic parsing, small observability/refactors) → may run unattended **after** value + verification gates pass.
+- **Low-risk** (tests, docs, CLI/digest wording, deterministic parsing, small observability/refactors, read-only analysis, trading gate reviews, backtest/report interpretation with no broker/live path) → may run unattended **after** value + verification gates pass.
 - **Medium-risk** (visible local UI, small product-surface behavior, payload/schema changes with tests, single-module refactors) → can be approved once each morning with `loop approve <project> --approve-medium`; every task must stay inside that day's code-enforced envelope, and the first execution is supervised.
-- **High-risk** (credentials/secrets/`.env`, external auth, launchd/cron, publishing/deploy, destructive ops, money/trading, broad rewrites, cross-project permission expansion) → **stays manual, never auto-executed.**
+- **High-risk** (credentials/secrets/`.env`, external auth, launchd/cron, publishing/deploy, destructive ops, broker credentials, live broker orders, real-money movement, live trading config flips, broad rewrites, cross-project permission expansion) → **stays manual, never auto-executed.**
+
+Risk is task-level, not project-level. A trading project is not automatically high risk: read-only gate review or backtest analysis can be low risk; offline/paper simulation can be medium; live broker/auth/money movement stays high.
 
 ## Value line / 价值线
 
@@ -234,6 +241,7 @@ In short: PM skills are strongly recommended power-ups, not runtime dependencies
 - Planner emits candidates with a `value_score` (1–5); the engine processes them by **descending value**.
 - A candidate below `value_threshold` (default 3) → **no-op cycle**, the worker does not run.
 - A high-value item that needs approval **blocks** lower-value busywork until you decide.
+- A high-value project that is not loop-ready can still rank first as **readiness work**; the loop should not keep selecting a smaller ready project just because it is easier to execute.
 
 ---
 
@@ -255,6 +263,8 @@ Quick orientation for an operating agent:
 
 - [examples/registry.example.json](examples/registry.example.json) — per-project config (auto-written by `loop init`)
 - [examples/portfolio.example.json](examples/portfolio.example.json) — private portfolio registry shape (auto-written under `~/.config/loop/portfolio.json`)
+- [examples/portfolio-profile.example.json](examples/portfolio-profile.example.json) — CTO intake profile shape (auto-written by `loop portfolio intake`)
+- `loop-engine/portfolio/<project>/profile.{md,json}` — private CTO intake profiles (auto-written by `loop portfolio intake`)
 - [examples/contract.example.yaml](examples/contract.example.yaml) — the `.loop/contract.yaml` schema
 - [examples/daily-focus.example.md](examples/daily-focus.example.md) — daily focus + preapproved envelope
 

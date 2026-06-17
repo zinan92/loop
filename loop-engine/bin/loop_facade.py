@@ -16,7 +16,7 @@ def usage(code: int = 2) -> int:
         "  /loop init [project] [--provider codex|claude]\n"
         "  /loop setup [--yes] [--provider codex|claude]\n"
         "  /loop doctor [project]\n"
-        "  /loop portfolio init|add|status\n"
+        "  /loop portfolio init|add|status|intake|init-loop\n"
         "  /loop morning [project...]\n"
         "  /loop approve [project] [--approve-medium | --medium-envelope NAME]\n"
         "  /loop reject [project]\n"
@@ -46,7 +46,7 @@ def optional_project_arg(args: list[str]) -> tuple[str | None, list[str]]:
     index = 0
     while index < len(args):
         arg = args[index]
-        if arg in {"--json", "--supervised", "--yes", "--start", "--medium", "--approve-medium"}:
+        if arg in {"--json", "--supervised", "--yes", "--start", "--medium", "--approve-medium", "--init-loop"}:
             passthrough.append(arg)
         elif arg in {
             "--provider",
@@ -116,7 +116,7 @@ def main() -> int:
         loopctl_args = ["notify", rest[0]]
         loopctl_args.extend(rest[1:])
     elif command == "portfolio":
-        if not rest or rest[0] not in {"init", "add", "status"}:
+        if not rest or rest[0] not in {"init", "add", "status", "intake", "init-loop"}:
             return usage()
         loopctl_args = ["portfolio"] + rest
     elif command == "scheduler":

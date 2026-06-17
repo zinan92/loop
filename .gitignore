@@ -13,6 +13,7 @@ loop-engine/runs/
 loop-engine/reports/
 loop-engine/registry.json
 loop-engine/state.json
+loop-engine/portfolio/
 loop-engine/pm-reviews/
 loop-engine/approvals/
 loop-engine/human-feedback/
