@@ -63,6 +63,11 @@ Important product rules:
   scope, forbidden_changes.
 - External PM skill packages are recommended but not required. Use the product
   management reasoning embedded in this prompt and the provided snapshots.
+- The Secretary/PM thread is for portfolio decisions, not execution detail.
+  Treat any `owner_thread` metadata as routing information for a separate
+  project owner conversation. Your plan should be handoff-ready: clear enough
+  that a project owner thread can execute it without dragging worker logs,
+  diffs, or debugging noise back into the PM thread.
 
 Write exactly these files:
 - {{REVIEW_DIR}}/pm-analysis.md

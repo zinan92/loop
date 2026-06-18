@@ -108,6 +108,8 @@ loop doctor                       # checks gh / sandbox-exec / the agent CLI you
 # 4) First onboarding: create your portfolio registry
 loop portfolio init
 loop portfolio add /path/to/your-product-repo
+loop portfolio add /path/to/owner-product \
+  --owner-thread-name "Owner thread name" --owner-mode codex_thread
 loop portfolio add https://github.com/owner/repo --mode plan-only
 loop portfolio add --linear-project "Newsletter" --mode hold
 loop portfolio status             # private source of truth for daily PM review
@@ -124,6 +126,8 @@ loop status
 # 6) Morning PM review across the portfolio
 loop morning                         # starts with a Portfolio Registry Verification board,
                                      # then writes pm-reviews/YYYY-MM-DD.{md,json}
+                                     # and handoffs/YYYY-MM-DD/<project>.md
+loop handoff <project>               # prints the owner-thread execution handoff
 loop approve <project>               # approve low-risk automatic work only
 # To approve every medium-risk item today inside the PM-recommended envelope:
 loop approve <project> --approve-medium
@@ -166,7 +170,14 @@ By default **only the top-ranked auto-runnable task executes per cycle** (`max_t
 
 ## Daily rhythm: morning & evening / 每日节奏
 
-`loop` now owns the full daily routine: **portfolio verification → morning review → approvals → day loop → evening recap**. The loop still keeps the human in charge of direction: morning review proposes and ranks work; only `loop approve` turns it into execution input.
+`loop` now owns the full daily routine: **portfolio verification → morning review → project-owner handoff → approvals → day loop → evening recap**. The loop still keeps the human in charge of direction: morning review proposes and ranks work; only `loop approve` turns it into execution input.
+
+The recommended operating model is a clean split between:
+
+- **Secretary/PM thread**: portfolio review, value ranking, approvals, evening recap, and only short product-level status.
+- **Project owner thread**: project execution, loop commands, PR/debug details, and `waiting_for_human` handling for one product.
+
+Morning review writes durable handoff prompts so the Secretary/PM thread does not get polluted by worker logs, diffs, install noise, or project-specific debugging.
 
 **First onboarding — build the private portfolio registry once:**
 1. `loop portfolio init` creates `~/.config/loop/portfolio.json`.
@@ -175,6 +186,7 @@ By default **only the top-ranked auto-runnable task executes per cycle** (`max_t
    - GitHub repo or URL: `loop portfolio add owner/repo` or `loop portfolio add https://github.com/owner/repo`
    - Linear project: `loop portfolio add --linear-project "Project Name"`
    - plain product name or URL for early ideas
+   - optional owner routing: `--owner-thread-name "TokenPulse owner" --owner-thread-id <thread-id> --owner-mode codex_thread`
 3. `loop init` also upserts the current repo into the portfolio as an executable `loop` project.
 4. `loop portfolio intake [project...]` performs the CTO catch-up pass for each portfolio entry: where the project lives, what it appears to be building, current stage/progress, primary artifact candidates, verification candidates, loop readiness, blockers, next steps, and task-level risk boundaries. It writes:
    - `loop-engine/portfolio/<project>/profile.md`
@@ -203,23 +215,29 @@ For local Git repos, `init-loop` is a required readiness gate, not a soft sugges
    - `loop-engine/pm-reviews/latest.md`
    - `loop-engine/pm-reviews/YYYY-MM-DD.json`
    - `loop-engine/pm-reviews/latest.json`
-2. `loop approve <project>` writes that project's approved focus to:
+   - `loop-engine/handoffs/YYYY-MM-DD/index.md`
+   - `loop-engine/handoffs/YYYY-MM-DD/<project>.md`
+   - `loop-engine/handoffs/latest/<project>.md`
+2. `loop handoff [project...]` rebuilds and prints the latest handoff index. Send each `<project>.md` to that project's owner thread. The handoff contains the day's objective, expected user value, risk envelope, value-ranked work, exact commands, and a reporting contract.
+3. `loop approve <project>` writes that project's approved focus to:
    - `<product-repo>/.loop/daily-focus/YYYY-MM-DD.md`
    - `<product-repo>/.loop/daily-focus/latest.md`
    - `loop-engine/approvals/YYYY-MM-DD.{json,md}`
-3. Medium-risk work is approved once in the morning, for the whole day, inside a bounded envelope:
+4. Medium-risk work is approved once in the morning, for the whole day, inside a bounded envelope:
    - recommended: `loop approve <project> --approve-medium`
    - `loop approve <project> --medium-envelope <name> --allowed-file ... --verification-command ...`
    - PM-recommended verification commands are clipped to the project's trusted `verification_commands`; untrusted suggestions are shown in the morning review but are not written into the approved envelope.
-4. Readiness work can be the highest-value work. If an important local Git repo is not loop-ready, morning review treats loop init as a required setup gate: define its artifact contract, verification commands, and baseline, then explicitly approve loop init with `loop approve <project> --init-loop`. That command mutates the repo by running loop bootstrap, then asks you to run morning review again before execution.
+5. Readiness work can be the highest-value work. If an important local Git repo is not loop-ready, morning review treats loop init as a required setup gate: define its artifact contract, verification commands, and baseline, then explicitly approve loop init with `loop approve <project> --init-loop`. That command mutates the repo by running loop bootstrap, then asks you to run morning review again before execution.
    - To approve every `init-loop` project recommended by the latest morning review: `loop approve --all-init-loop`
    - During first onboarding, to initialize every eligible local Git repo in the portfolio: `loop portfolio init-loop --all-eligible`
 
 **Day — execute only approved work:**
-1. `loop start-day [project...]` starts approved projects only.
-2. Low-risk work may run unattended after value/verification gates.
-3. Medium-risk work may run unattended only when it matches the morning-approved envelope. The first medium-risk execution runs with `supervised=true`, then continues hourly only if that first cycle does not leave `waiting_for_human`.
-4. Budgets and stop rules come from daily focus: `recommended_cycles`, `stop_condition`, `value_threshold`, `max_noop_cycles`.
+1. Run execution commands from the project owner thread, using `loop-engine/handoffs/latest/<project>.md` as the prompt.
+2. `loop start-day [project...]` starts approved projects only.
+3. Low-risk work may run unattended after value/verification gates.
+4. Medium-risk work may run unattended only when it matches the morning-approved envelope. The first medium-risk execution runs with `supervised=true`, then continues hourly only if that first cycle does not leave `waiting_for_human`.
+5. Budgets and stop rules come from daily focus: `recommended_cycles`, `stop_condition`, `value_threshold`, `max_noop_cycles`.
+6. The owner thread reports back only shipped value, PR/issue links, digest/report path, `waiting_for_human` items, and a continue/stop/move recommendation.
 
 **Evening — stop, recap, score:**
 1. `loop evening [project...]` pauses the named projects. With no project args, it pauses **all active registered loops**, even loops that were started manually outside the approval flow.
@@ -270,6 +288,7 @@ Risk is task-level, not project-level. A trading project is not automatically hi
 Quick orientation for an operating agent:
 
 - **Read state, don't poll commands:** `loop status --json`, or read `loop-engine/state.json` directly. Key fields: `loop_job.state` (`active|paused|stopped`), `current_phase`, `waiting_for_human` (`{reason, issue_path}` or null), `runs[-1].status`.
+- **Keep Secretary/PM context clean:** after `loop morning`, read `loop-engine/handoffs/latest/<project>.md` and move execution to that project owner thread. Report back only product-level outcome and links.
 - **Recap is a file:** read `loop-engine/reports/<project>/latest.md`; don't call `loop digest` in a loop.
 - **Escalate, don't bypass:** anything in `waiting_for_human` needs a human decision (see the reason-code table in [AGENTS.md](AGENTS.md) and [Troubleshooting](#troubleshooting--排错)). Never edit prompts/reviewer output to force a pass.
 
@@ -281,6 +300,7 @@ Quick orientation for an operating agent:
 - [examples/portfolio.example.json](examples/portfolio.example.json) — private portfolio registry shape (auto-written under `~/.config/loop/portfolio.json`)
 - [examples/portfolio-profile.example.json](examples/portfolio-profile.example.json) — CTO intake profile shape (auto-written by `loop portfolio intake`)
 - `loop-engine/portfolio/<project>/profile.{md,json}` — private CTO intake profiles (auto-written by `loop portfolio intake`)
+- `loop-engine/handoffs/<date>/<project>.md` — owner-thread execution prompt generated by `loop morning` / `loop handoff`
 - [examples/contract.example.yaml](examples/contract.example.yaml) — the `.loop/contract.yaml` schema
 - [examples/daily-focus.example.md](examples/daily-focus.example.md) — daily focus + preapproved envelope
 
@@ -364,7 +384,7 @@ Morning/day-start `LOOP_BLOCKED` reasons: `portfolio_missing` means run `loop po
 
 ## Runtime artifacts / 运行产物
 
-Git-ignored by design — they hold local paths, private strategy, and agent transcripts. **Keep them out of public repos:** `loop-engine/runs/`, `reports/`, `registry.json`, `state.json`, `pm-reviews/`, `approvals/`, `evening-scorecards/`, `human-feedback/`, `knowledge/`, `logs/`, `locks/`, `worktrees/`.
+Git-ignored by design — they hold local paths, private strategy, and agent transcripts. **Keep them out of public repos:** `loop-engine/runs/`, `reports/`, `registry.json`, `state.json`, `pm-reviews/`, `approvals/`, `handoffs/`, `evening-scorecards/`, `human-feedback/`, `knowledge/`, `logs/`, `locks/`, `worktrees/`.
 
 ## Repository layout / 仓库结构
 

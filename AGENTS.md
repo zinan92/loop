@@ -6,7 +6,7 @@
 ## What loop is (for you)
 
 `loop` is a daily product operating loop around a private portfolio registry and local Git repos:
-`portfolio intake → portfolio verification → morning review → approval envelope → planner → value/risk gates → worker (isolated worktree) → verification (sandboxed) → reviewer → auto PR + merge → digest → evening scorecard → memory`.
+`portfolio intake → portfolio verification → morning review → project-owner handoff → approval envelope → planner → value/risk gates → worker (isolated worktree) → verification (sandboxed) → reviewer → auto PR + merge → digest → evening scorecard → memory`.
 You operate it through the `loop` CLI (or `python3 loop-engine/bin/loopctl.py <cmd> --project <id>`). You do **not** edit the engine, prompts, or reviewer output to influence outcomes.
 
 ## First, relay these safety facts to your human
@@ -27,9 +27,10 @@ Before the human starts `loop` (especially unattended), tell them, plainly:
   - `waiting_for_human` → `null`, or `{ "reason": <code>, "issue_path": <path> }`
   - `runs[-1].status` → `merged | no_op | needs_human | failed | ...`
 - **Read the recap from a file**, not by re-running digest: `loop-engine/reports/<project>/latest.md`.
-- **Start with portfolio onboarding once:** `loop portfolio init`, then `loop portfolio add ...` using any handle the human has (local path, GitHub repo/URL, Linear project, URL, or plain name). `loop init` also upserts the current repo into the portfolio.
+- **Start with portfolio onboarding once:** `loop portfolio init`, then `loop portfolio add ...` using any handle the human has (local path, GitHub repo/URL, Linear project, URL, or plain name). If the human has a dedicated project conversation/session, capture it with `--owner-thread-name`, `--owner-thread-id`, `--owner-mode`, and `--handoff-policy`. `loop init` also upserts the current repo into the portfolio.
 - **Run CTO catch-up for the portfolio:** `loop portfolio intake [project...]` writes `loop-engine/portfolio/<project>/profile.{md,json}` with end goal, current stage/progress, primary artifacts, verification candidates, readiness blockers, next steps, and task-level risk boundaries. Portfolio stages are fixed to `idea`, `building_mvp`, `mvp_released`, `released_v1`, and `iterating`; do not invent new stage labels.
-- **Start each day with PM review:** `loop morning` refreshes portfolio intake profiles, shows Portfolio Registry Verification and Portfolio Readiness boards, then runs the PM Review Agent and writes `pm-reviews/YYYY-MM-DD.{md,json}`; `loop approve <project>` writes the project's `.loop/daily-focus/latest.md`.
+- **Start each day with PM review:** `loop morning` refreshes portfolio intake profiles, shows Portfolio Registry Verification and Portfolio Readiness boards, then runs the PM Review Agent and writes `pm-reviews/YYYY-MM-DD.{md,json}` plus `handoffs/YYYY-MM-DD/<project>.md`; `loop approve <project>` writes the project's `.loop/daily-focus/latest.md`.
+- **Keep the Secretary/PM thread clean:** after morning review, use `loop handoff [project...]` or read `loop-engine/handoffs/latest/<project>.md`, then move execution commands and debug detail to that project's owner thread. The PM thread should keep only portfolio decisions, approvals, shipped value, PR/issue links, digest paths, and `waiting_for_human` summaries.
 - **Do not ignore non-ready high-value projects:** if a local Git repo lacks `.loop/contract.yaml`, clean baseline, or verification commands, surface readiness work. `init-loop` is a required readiness gate for eligible local Git repos, not a soft suggestion; normalize `blocked_needs_loop_init` projects back to `decision: "init-loop"` even if the PM agent tries to mark them `plan-only` or `hold`. `loop approve <project> --init-loop` is the explicit mutation path for approved loop bootstrap; `loop approve --all-init-loop` applies the latest morning review's required init-loop projects, and `loop portfolio init-loop --all-eligible` bootstraps every eligible local Git repo during onboarding. After any init-loop approval, rerun `loop morning` before execution.
 - **Approve medium risk once per day:** when morning recommends a bounded envelope, `loop approve <project> --approve-medium` approves all same-day medium-risk items that stay inside that envelope. Do not approve medium risk item-by-item inside each cycle.
 - **Start approved projects only:** `loop start-day` reads `approvals/latest.json`; it refuses projects not approved today.
@@ -79,7 +80,8 @@ commands:
   portfolio_stages: { allowed: [idea, building_mvp, mvp_released, released_v1, iterating], default_progress_percent: { idea: 10, building_mvp: 35, mvp_released: 60, released_v1: 80, iterating: 90 } }
   setup:    { in: "operator machine", out: "~/.config/loop/config.json + missing-action prompts" }
   init:     { in: "product repo cwd", out: ".loop/contract.yaml + registry + pilot branch", fail: "LOOP_BLOCKED <reason>" }
-  morning:  { in: "portfolio registry + registered project snapshots", out: "portfolio verification board + pm-reviews/YYYY-MM-DD.{md,json} + latest.{md,json}, PM-agent value-ranked portfolio board" }
+  morning:  { in: "portfolio registry + registered project snapshots", out: "portfolio verification board + pm-reviews/YYYY-MM-DD.{md,json} + latest.{md,json}, PM-agent value-ranked portfolio board + handoffs/YYYY-MM-DD/<project>.md" }
+  handoff:  { in: "latest morning PM review [project...]", out: "handoffs/YYYY-MM-DD/index.{md,json} + handoffs/YYYY-MM-DD/<project>.md + latest mirrors; owner-thread prompt for isolated execution context" }
   approve:  { in: "project [--approve-medium | --medium-envelope ... | --init-loop]", out: ".loop/daily-focus/latest.md + approvals/latest.json, or approved loop bootstrap for readiness work" }
   reject:   { in: "project", out: "approvals/latest.json rejection record" }
   start-day: { in: "today's approved projects", out: "approved loops active; medium first run supervised" }
@@ -127,6 +129,7 @@ runtime_artifacts:          # git-ignored; never commit to a public repo
   runs: loop-engine/runs/<run_id>/
   pm_review: loop-engine/pm-reviews/latest.md
   pm_review_plan: loop-engine/pm-reviews/latest.json
+  handoffs: loop-engine/handoffs/latest/<project>.md
   portfolio: ~/.config/loop/portfolio.json
   portfolio_profiles: loop-engine/portfolio/<project>/profile.{md,json}
   approvals: loop-engine/approvals/latest.json
