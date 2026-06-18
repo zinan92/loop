@@ -1218,6 +1218,10 @@ def infer_portfolio_entry(
     url: str | None = None,
     mode: str | None = None,
     default_review: bool = True,
+    owner_thread_id: str | None = None,
+    owner_thread_name: str | None = None,
+    owner_mode: str | None = None,
+    handoff_policy: str | None = None,
 ) -> dict:
     handles: dict[str, str] = {}
     raw_handle = (handle or "").strip()
@@ -1275,10 +1279,52 @@ def infer_portfolio_entry(
         "default_review": bool(default_review),
         "handles": handles,
     }
+    owner_thread = normalize_owner_thread({
+        "id": owner_thread_id,
+        "name": owner_thread_name,
+        "mode": owner_mode,
+        "handoff_policy": handoff_policy,
+    })
+    if owner_thread:
+        entry["owner_thread"] = owner_thread
     if handles.get("loop_project_id"):
         entry["id"] = str(handles["loop_project_id"])
         entry["mode"] = "loop"
     return entry
+
+
+def normalize_owner_thread(raw: object) -> dict:
+    if not isinstance(raw, dict):
+        return {}
+    owner_id = str(raw.get("id") or raw.get("thread_id") or "").strip()
+    name = str(raw.get("name") or raw.get("thread_name") or "").strip()
+    mode = str(raw.get("mode") or raw.get("owner_mode") or "").strip().lower()
+    handoff_policy = str(raw.get("handoff_policy") or raw.get("policy") or "").strip().lower()
+    if mode not in {"manual", "codex_thread", "external"}:
+        mode = "codex_thread" if owner_id else "manual" if name else ""
+    if handoff_policy not in {"manual_copy", "codex_dispatch", "external"}:
+        handoff_policy = "manual_copy" if (owner_id or name or mode) else ""
+    normalized = {}
+    if owner_id:
+        normalized["id"] = owner_id
+    if name:
+        normalized["name"] = name
+    if mode:
+        normalized["mode"] = mode
+    if handoff_policy:
+        normalized["handoff_policy"] = handoff_policy
+    return normalized
+
+
+def portfolio_owner_thread(entry: dict) -> dict:
+    owner = normalize_owner_thread(entry.get("owner_thread"))
+    if owner:
+        return owner
+    metadata = entry.get("metadata") if isinstance(entry.get("metadata"), dict) else {}
+    owner = normalize_owner_thread(metadata.get("owner_thread"))
+    if owner:
+        return owner
+    return {}
 
 
 def portfolio_project_readiness(entry: dict) -> str:
@@ -1305,6 +1351,7 @@ def portfolio_entry_to_row(entry: dict) -> dict:
     handles = entry.get("handles") or {}
     project = entry.get("id") or portfolio_entry_id(entry)
     profile = load_portfolio_profile(str(project))
+    owner = portfolio_owner_thread(entry)
     return {
         "project": project,
         "name": entry.get("name") or portfolio_entry_id(entry),
@@ -1315,6 +1362,10 @@ def portfolio_entry_to_row(entry: dict) -> dict:
         "linear_project": handles.get("linear_project") or "-",
         "url": handles.get("url") or "-",
         "loop_project_id": handles.get("loop_project_id") or "-",
+        "owner_thread_id": owner.get("id") or "-",
+        "owner_thread_name": owner.get("name") or "-",
+        "owner_mode": owner.get("mode") or "-",
+        "handoff_policy": owner.get("handoff_policy") or "-",
         "readiness": portfolio_project_readiness(entry),
         "profile_status": "present" if profile else "missing",
     }
@@ -3983,6 +4034,229 @@ def pm_review_paths() -> dict[str, Path]:
     }
 
 
+def handoff_paths(date: str | None = None) -> dict[str, Path]:
+    handoff_date = date or today_date()
+    root = ENGINE_ROOT / "handoffs" / handoff_date
+    return {
+        "dir": root,
+        "index_json": root / "index.json",
+        "index_md": root / "index.md",
+        "latest_dir": ENGINE_ROOT / "handoffs" / "latest",
+    }
+
+
+def handoff_project_path(project: str, date: str | None = None) -> Path:
+    return handoff_paths(date)["dir"] / f"{slugify_project_id(project)}.md"
+
+
+def handoff_owner_label(row: dict) -> str:
+    portfolio = row.get("portfolio") or {}
+    name = portfolio.get("owner_thread_name")
+    owner_id = portfolio.get("owner_thread_id")
+    mode = portfolio.get("owner_mode")
+    parts = []
+    if name and name != "-":
+        parts.append(str(name))
+    if owner_id and owner_id != "-":
+        parts.append(str(owner_id))
+    if mode and mode != "-":
+        parts.append(f"mode={mode}")
+    return " / ".join(parts) if parts else "unassigned"
+
+
+def handoff_status_for_project(project: str) -> dict:
+    approvals = load_latest_approvals()
+    approved = approvals.get("approved") or {}
+    rejected = approvals.get("rejected") or {}
+    if project in rejected:
+        return {"status": "rejected", "record": rejected[project]}
+    if project in approved:
+        record = approved[project]
+        if record.get("readiness_action") == "init_loop":
+            return {"status": "approved_init_loop_only", "record": record}
+        return {"status": "approved", "record": record}
+    return {"status": "not_approved", "record": {}}
+
+
+def handoff_commands_for_row(row: dict, approval_status: str) -> list[str]:
+    project = row["project"]
+    decision = row.get("decision")
+    if approval_status == "rejected":
+        return []
+    if decision == "init-loop":
+        return [
+            f"loop approve --project {project} --init-loop",
+            "loop morning",
+        ]
+    if decision == "read-only":
+        return [
+            f"loop digest --project {project}",
+        ]
+    if decision == "loop":
+        commands = []
+        medium = row.get("medium_envelope")
+        if medium:
+            commands.append(f"loop approve --project {project} --approve-medium")
+            commands.append("loop start-day --project " + project)
+            commands.append(f"loop run-now --project {project} --supervised")
+        else:
+            commands.append(f"loop approve --project {project}")
+            commands.append("loop start-day --project " + project)
+            commands.append(f"loop run-now --project {project}")
+        return commands
+    return []
+
+
+def render_project_handoff(row: dict, approval_status: dict) -> str:
+    portfolio = row.get("portfolio") or {}
+    profile = row.get("portfolio_profile") or {}
+    medium = row.get("medium_envelope") or {}
+    commands = handoff_commands_for_row(row, approval_status["status"])
+    owner_label = handoff_owner_label(row)
+    progress = profile.get("progress_percent")
+    progress_display = f"{progress}%" if progress is not None else "-"
+    lines = [
+        f"# Project Handoff: {row['project']}",
+        "",
+        f"Date: {today_date()}",
+        f"Owner thread: {owner_label}",
+        f"Approval status: {approval_status['status']}",
+        "",
+        "## Secretary Decision",
+        "",
+        f"- Decision: `{row.get('decision')}`",
+        f"- Today objective: {row.get('today_focus')}",
+        f"- Top value task: {row.get('top_value_task')}",
+        f"- Expected user/operator value: {row.get('user_benefit')}",
+        f"- Success criteria: {row.get('success_criteria')}",
+        f"- Recommended cycles: `{row.get('recommended_cycles')}`",
+        f"- Stop condition: {row.get('stop_condition')}",
+        f"- Value threshold: `{row.get('value_threshold')}`",
+        "",
+        "## Project Handles",
+        "",
+        f"- Local path: `{portfolio.get('local_path') or '-'}`",
+        f"- GitHub: `{portfolio.get('github_repo') or '-'}`",
+        f"- Linear: `{portfolio.get('linear_project') or '-'}`",
+        f"- Loop project id: `{portfolio.get('loop_project_id') or '-'}`",
+        f"- Stage: `{profile.get('current_stage') or '-'}`",
+        f"- Progress: `{progress_display}`",
+        "",
+        "## Risk And Approval Envelope",
+        "",
+        f"- Top risk: `{row.get('top_risk')}`",
+        f"- Approval path: {row.get('approval_needed')}",
+    ]
+    if medium:
+        lines.extend([
+            f"- Medium envelope: `{medium.get('name')}`",
+            f"- Scope: {medium.get('scope')}",
+            "- Allowed files:",
+        ])
+        lines.extend(f"  - `{item}`" for item in (medium.get("allowed_files") or []))
+        lines.append("- Verification commands:")
+        lines.extend(f"  - `{item}`" for item in (medium.get("verification_commands") or []))
+        forbidden = medium.get("forbidden_changes") or []
+        if forbidden:
+            lines.append("- Forbidden changes:")
+            lines.extend(f"  - {item}" for item in forbidden)
+    else:
+        lines.append("- Medium envelope: `none`")
+    lines.extend([
+        "",
+        "## Value-Ranked Work",
+        "",
+    ])
+    for task in row.get("tasks") or []:
+        lines.extend([
+            f"{task['rank']}. {task['task']}",
+            f"   - value_score: `{task['value_score']}`",
+            f"   - risk: `{task['risk']}`",
+            f"   - approval_path: {task['approval_path']}",
+            f"   - benefit: {task['benefit']}",
+        ])
+    lines.extend([
+        "",
+        "## Commands For Owner Thread",
+        "",
+    ])
+    if commands:
+        lines.append("Run these from the project owner thread, not from the Secretary/PM thread:")
+        lines.append("")
+        lines.append("```sh")
+        lines.extend(commands)
+        lines.append("```")
+    elif approval_status["status"] == "rejected":
+        lines.append("No execution command. The Secretary/PM thread rejected this project for today.")
+    else:
+        lines.append("No execution command. This project is plan-only, blocked, hold, or needs more portfolio identity.")
+    lines.extend([
+        "",
+        "## Reporting Contract",
+        "",
+        "The owner thread should report back to the Secretary/PM thread with only:",
+        "",
+        "- shipped user-visible value",
+        "- PR or issue links",
+        "- digest/report path",
+        "- waiting_for_human items",
+        "- whether to continue, stop, or move to another project",
+        "",
+        "Do not paste worker logs, long test output, raw diffs, or dependency install noise into the Secretary/PM thread.",
+    ])
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def write_handoff_files(plan: dict, projects: list[str] | None = None) -> dict:
+    rows = plan.get("projects") if isinstance(plan.get("projects"), list) else []
+    selected = set(projects or [])
+    if selected:
+        rows = [row for row in rows if row.get("project") in selected]
+    paths = handoff_paths(str(plan.get("date") or today_date()))
+    paths["dir"].mkdir(parents=True, exist_ok=True)
+    paths["latest_dir"].mkdir(parents=True, exist_ok=True)
+    items: list[dict] = []
+    for row in rows:
+        if not isinstance(row, dict) or not row.get("project"):
+            continue
+        project = str(row["project"])
+        status = handoff_status_for_project(project)
+        path = handoff_project_path(project, str(plan.get("date") or today_date()))
+        text = render_project_handoff(row, status)
+        path.write_text(text)
+        latest_path = paths["latest_dir"] / path.name
+        latest_path.write_text(text)
+        items.append({
+            "project": project,
+            "decision": row.get("decision"),
+            "approval_status": status["status"],
+            "owner_thread": {
+                "id": (row.get("portfolio") or {}).get("owner_thread_id") or "-",
+                "name": (row.get("portfolio") or {}).get("owner_thread_name") or "-",
+                "mode": (row.get("portfolio") or {}).get("owner_mode") or "-",
+                "handoff_policy": (row.get("portfolio") or {}).get("handoff_policy") or "-",
+            },
+            "handoff": str(path),
+            "latest": str(latest_path),
+        })
+    index = {"date": str(plan.get("date") or today_date()), "handoffs": items}
+    write_json(paths["index_json"], index)
+    latest_index = paths["latest_dir"] / "index.json"
+    write_json(latest_index, index)
+    lines = [f"# Project Handoffs - {index['date']}", ""]
+    if not items:
+        lines.append("- None")
+    for item in items:
+        lines.append(
+            f"- `{item['project']}` decision=`{item['decision']}` "
+            f"approval=`{item['approval_status']}` owner={display_text(item['owner_thread'].get('name') or '-')} "
+            f"handoff={item['handoff']}"
+        )
+    paths["index_md"].write_text("\n".join(lines).rstrip() + "\n")
+    (paths["latest_dir"] / "index.md").write_text(paths["index_md"].read_text())
+    return index
+
+
 def safe_repo_file_snapshot(repo_path: Path, rel_path: str, max_chars: int = 3000) -> str:
     path = repo_path / rel_path
     if not path.exists():
@@ -4467,8 +4741,8 @@ def render_morning_review(rows: list[dict], summary: str = "", questions: list[s
         "",
         "Verify this is the full portfolio before approving today's loops. Add missing projects with `loop portfolio add ...`.",
         "",
-        "| Project | Mode | Default Review | Readiness | Local Path | GitHub | Linear | URL |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- |",
+        "| Project | Mode | Default Review | Readiness | Owner Thread | Local Path | GitHub | Linear | URL |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for row in rows:
         portfolio = row.get("portfolio") or {}
@@ -4477,6 +4751,7 @@ def render_morning_review(rows: list[dict], summary: str = "", questions: list[s
             f"{display_text(portfolio.get('mode') or row.get('decision'))} | "
             f"{display_text(portfolio.get('default_review', True))} | "
             f"{display_text(row.get('readiness') or portfolio.get('readiness') or '-')} | "
+            f"{display_text(portfolio.get('owner_thread_name') or '-')} | "
             f"{display_text(portfolio.get('local_path') or '-')} | "
             f"{display_text(portfolio.get('github_repo') or '-')} | "
             f"{display_text(portfolio.get('linear_project') or '-')} | "
@@ -4577,6 +4852,19 @@ def render_morning_review(rows: list[dict], summary: str = "", questions: list[s
         lines.append(
             f"| {display_text(row['project'])} | {row['recommended_cycles']} | "
             f"{display_text(row['stop_condition'], max_chars=220)} | {row['value_threshold']} |"
+        )
+    lines.extend([
+        "",
+        "## Project Owner Handoffs",
+        "",
+        "These files are the prompts to send to project owner threads. Use them instead of pasting execution detail into the Secretary/PM thread.",
+        "",
+        f"- Handoff index: `{handoff_paths()['index_md']}`",
+    ])
+    for row in rows:
+        lines.append(
+            f"- `{display_text(row['project'])}` → `{handoff_project_path(row['project'])}` "
+            f"(owner: {display_text(handoff_owner_label(row))})"
         )
     lines.extend([
         "",
@@ -4685,6 +4973,8 @@ def write_morning_review(projects: list[str] | None = None) -> dict:
         pm_agent_config([row["project"] for row in baseline_rows]),
     )
     plan = normalize_pm_plan(load_agent_pm_plan(paths["agent_plan"]), baseline_rows)
+    handoff_index = write_handoff_files(plan)
+    plan["handoffs"] = handoff_index.get("handoffs") or []
     text = render_morning_review(
         plan["projects"],
         summary=plan.get("summary", ""),
@@ -4861,6 +5151,10 @@ def portfolio_add_command(
     url: str | None,
     mode: str | None,
     default_review: bool,
+    owner_thread_id: str | None = None,
+    owner_thread_name: str | None = None,
+    owner_mode: str | None = None,
+    handoff_policy: str | None = None,
 ) -> None:
     entry = infer_portfolio_entry(
         handle,
@@ -4871,6 +5165,10 @@ def portfolio_add_command(
         url=url,
         mode=mode,
         default_review=default_review,
+        owner_thread_id=owner_thread_id,
+        owner_thread_name=owner_thread_name,
+        owner_mode=owner_mode,
+        handoff_policy=handoff_policy,
     )
     saved = upsert_portfolio_entry(entry)
     row = portfolio_entry_to_row(saved)
@@ -4917,7 +5215,8 @@ def portfolio_status_command(json_output: bool = False) -> None:
         print(
             f"PORTFOLIO_PROJECT {row['project']} mode={row['mode']} "
             f"review={str(row['default_review']).lower()} readiness={row['readiness']} "
-                f"path={row['local_path']} github={row['github_repo']} linear={row['linear_project']}"
+            f"path={row['local_path']} github={row['github_repo']} linear={row['linear_project']} "
+            f"owner={row['owner_thread_name']}"
         )
 
 
@@ -5082,6 +5381,10 @@ def portfolio_command(args: argparse.Namespace) -> None:
             args.url,
             args.mode,
             not args.no_review,
+            args.owner_thread_id,
+            args.owner_thread_name,
+            args.owner_mode,
+            args.handoff_policy,
         )
     elif args.portfolio_command == "status":
         portfolio_status_command(json_output=args.json)
@@ -5162,6 +5465,8 @@ def morning_command(projects: list[str] | None, start_after: bool = False) -> No
     result = write_morning_review(projects)
     print(f"MORNING_REVIEW {result['paths']['dated']}")
     print(f"MORNING_REVIEW_LATEST {result['paths']['latest']}")
+    handoff_index = handoff_paths()["index_md"]
+    print(f"MORNING_HANDOFFS {handoff_index}")
     for row in result["rows"]:
         print(
             f"MORNING_PROJECT {row['project']} value={row['tasks'][0]['value_score']} "
@@ -5169,6 +5474,26 @@ def morning_command(projects: list[str] | None, start_after: bool = False) -> No
         )
     if start_after:
         start_day_command([row["project"] for row in result["rows"]])
+
+
+def handoff_command(projects: list[str] | None = None, as_json: bool = False) -> None:
+    plan = latest_pm_plan()
+    if not plan:
+        raise LoopBlocked(
+            "missing_morning_review",
+            "No current morning PM review found. Run `loop morning` before generating handoffs.",
+            {"next_actions": ["loop morning"]},
+        )
+    index = write_handoff_files(plan, projects=projects)
+    if as_json:
+        print(json.dumps(index, ensure_ascii=False, indent=2))
+        return
+    print(f"HANDOFF_INDEX {handoff_paths(str(plan.get('date') or today_date()))['index_md']}")
+    for item in index.get("handoffs") or []:
+        print(
+            f"HANDOFF_PROJECT {item['project']} decision={item['decision']} "
+            f"approval={item['approval_status']} file={item['handoff']}"
+        )
 
 
 def approve_command(
@@ -6274,6 +6599,10 @@ def main() -> int:
     portfolio_add.add_argument("--url")
     portfolio_add.add_argument("--mode", choices=sorted(PORTFOLIO_MODES), default="plan-only")
     portfolio_add.add_argument("--no-review", action="store_true")
+    portfolio_add.add_argument("--owner-thread-id")
+    portfolio_add.add_argument("--owner-thread-name")
+    portfolio_add.add_argument("--owner-mode", choices=["manual", "codex_thread", "external"])
+    portfolio_add.add_argument("--handoff-policy", choices=["manual_copy", "codex_dispatch", "external"])
     portfolio_status = portfolio_sub.add_parser("status")
     portfolio_status.add_argument("--json", action="store_true")
     portfolio_intake = portfolio_sub.add_parser("intake")
@@ -6286,6 +6615,9 @@ def main() -> int:
     morning_parser = sub.add_parser("morning")
     morning_parser.add_argument("--project", action="append")
     morning_parser.add_argument("--start", action="store_true")
+    handoff_parser = sub.add_parser("handoff")
+    handoff_parser.add_argument("--project", action="append")
+    handoff_parser.add_argument("--json", action="store_true")
     approve_parser = sub.add_parser("approve")
     approve_parser.add_argument("--project")
     approve_parser.add_argument("--approve-medium", action="store_true")
@@ -6369,6 +6701,8 @@ def main() -> int:
             portfolio_command(args)
         elif args.command == "morning":
             morning_command(args.project, start_after=args.start)
+        elif args.command == "handoff":
+            handoff_command(args.project, as_json=args.json)
         elif args.command == "approve":
             approve_command(
                 args.project,

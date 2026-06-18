@@ -18,6 +18,7 @@ def usage(code: int = 2) -> int:
         "  /loop doctor [project]\n"
         "  /loop portfolio init|add|status|intake|init-loop [project|--all-eligible]\n"
         "  /loop morning [project...]\n"
+        "  /loop handoff [project...] [--json]\n"
         "  /loop approve [project] [--approve-medium | --medium-envelope NAME | --init-loop | --all-init-loop]\n"
         "  /loop reject [project]\n"
         "  /loop start-day [project...]\n"
@@ -113,10 +114,10 @@ def main() -> int:
         loopctl_args = [command] + passthrough
         if project:
             loopctl_args += ["--project", project]
-    elif command in {"morning", "start-day", "evening"}:
+    elif command in {"morning", "start-day", "evening", "handoff"}:
         loopctl_args = [command]
         for arg in rest:
-            if arg == "--start":
+            if arg in {"--start", "--json"}:
                 loopctl_args.append(arg)
             else:
                 loopctl_args += ["--project", arg]

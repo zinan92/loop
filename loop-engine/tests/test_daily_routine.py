@@ -193,12 +193,29 @@ def test_facade_supports_doctor_and_init_provider(monkeypatch):
     assert loop_facade.main() == 0
     assert captured["cmd"][-3:] == ["portfolio", "init-loop", "--all-eligible"]
 
+    monkeypatch.setattr(sys, "argv", ["loop", "handoff", "demo", "--json"])
+    assert loop_facade.main() == 0
+    assert captured["cmd"][-4:] == ["handoff", "--project", "demo", "--json"]
+
 
 def test_portfolio_add_accepts_multiple_handle_types(monkeypatch, tmp_path, capsys):
     repo = make_repo(tmp_path)
     patch_engine(monkeypatch, tmp_path, repo)
 
-    loopctl.portfolio_add_command(str(repo), "Local Demo", None, None, None, None, "plan-only", True)
+    loopctl.portfolio_add_command(
+        str(repo),
+        "Local Demo",
+        None,
+        None,
+        None,
+        None,
+        "plan-only",
+        True,
+        "thread-123",
+        "Local Demo Owner",
+        "codex_thread",
+        "manual_copy",
+    )
     loopctl.portfolio_add_command("https://github.com/acme/app", None, None, None, None, None, "read-only", True)
     loopctl.portfolio_add_command(None, None, None, None, "Content Pipeline", None, "hold", False)
 
@@ -210,6 +227,10 @@ def test_portfolio_add_accepts_multiple_handle_types(monkeypatch, tmp_path, caps
     }
     assert "PORTFOLIO_ADDED" in output
     assert rows["local-demo"]["local_path"] == str(repo)
+    assert rows["local-demo"]["owner_thread_id"] == "thread-123"
+    assert rows["local-demo"]["owner_thread_name"] == "Local Demo Owner"
+    assert rows["local-demo"]["owner_mode"] == "codex_thread"
+    assert rows["local-demo"]["handoff_policy"] == "manual_copy"
     assert rows["app"]["github_repo"] == "acme/app"
     assert rows["content-pipeline"]["linear_project"] == "Content Pipeline"
     assert rows["content-pipeline"]["default_review"] is False
@@ -259,6 +280,12 @@ def test_portfolio_profile_uses_standard_stage_defaults(monkeypatch, tmp_path):
                     "local_path": str(repo),
                     "github_repo": "owner/demo",
                 },
+                "owner_thread": {
+                    "id": "thread-demo",
+                    "name": "Demo Owner",
+                    "mode": "codex_thread",
+                    "handoff_policy": "manual_copy",
+                },
             },
             "early-idea": {
                 "id": "early-idea",
@@ -297,6 +324,12 @@ def test_portfolio_profile_respects_stage_and_progress_override(monkeypatch, tmp
                     "loop_project_id": "demo",
                     "local_path": str(repo),
                     "github_repo": "owner/demo",
+                },
+                "owner_thread": {
+                    "id": "thread-demo",
+                    "name": "Demo Owner",
+                    "mode": "codex_thread",
+                    "handoff_policy": "manual_copy",
                 },
             },
         },
@@ -653,6 +686,12 @@ def test_morning_review_includes_portfolio_verification_board(monkeypatch, tmp_p
                     "local_path": str(repo),
                     "github_repo": "owner/demo",
                 },
+                "owner_thread": {
+                    "id": "thread-demo",
+                    "name": "Demo Owner",
+                    "mode": "codex_thread",
+                    "handoff_policy": "manual_copy",
+                },
             },
             "newsletter": {
                 "id": "newsletter",
@@ -673,10 +712,12 @@ def test_morning_review_includes_portfolio_verification_board(monkeypatch, tmp_p
     text = result["markdown"]
     assert "Portfolio Registry Verification" in text
     assert "Verify this is the full portfolio" in text
-    assert "| demo | loop | True | executable |" in text
-    assert "| newsletter | plan-only | True | pm_only_missing_local_path |" in text
+    assert "| demo | loop | True | executable | Demo Owner |" in text
+    assert "| newsletter | plan-only | True | pm_only_missing_local_path | - |" in text
+    assert "Project Owner Handoffs" in text
     snapshot = json.loads(result["paths"]["snapshot"].read_text())
     assert [row["project"] for row in snapshot["portfolio_registry"]] == ["demo", "newsletter"]
+    assert snapshot["portfolio_registry"][0]["owner_thread_name"] == "Demo Owner"
     assert result["plan"]["projects"][0]["project"] == "demo"
     assert any(row["project"] == "newsletter" for row in result["plan"]["projects"])
 
@@ -695,11 +736,37 @@ def test_morning_review_writes_cross_project_board(monkeypatch, tmp_path):
     assert "Ship a visible calculator input flow" in text
     assert "loop approve demo --approve-medium" in text
     assert "Ranked Development Tasks" in text
+    assert "Project Owner Handoffs" in text
     assert "demo" in text
     assert calls and "PM Review Agent" in calls[0]["prompt"]
     plan = json.loads((engine / "pm-reviews" / "latest.json").read_text())
     assert plan["projects"][0]["medium_envelope"]["name"] == "primary-surface"
+    assert plan["handoffs"][0]["project"] == "demo"
+    handoff = engine / "handoffs" / loopctl.today_date() / "demo.md"
+    assert handoff.exists()
+    handoff_text = handoff.read_text()
+    assert "Project Handoff: demo" in handoff_text
+    assert "Run these from the project owner thread" in handoff_text
+    assert "loop approve --project demo --approve-medium" in handoff_text
+    assert "Do not paste worker logs" in handoff_text
     assert (engine / "pm-reviews").exists()
+
+
+def test_handoff_command_rebuilds_filtered_project_handoff(monkeypatch, tmp_path, capsys):
+    repo = make_repo(tmp_path)
+    engine = patch_engine(monkeypatch, tmp_path, repo)
+    patch_pm_agent(monkeypatch)
+    loopctl.write_morning_review(["demo"])
+    (engine / "handoffs" / loopctl.today_date() / "demo.md").unlink()
+
+    loopctl.handoff_command(["demo"], as_json=False)
+
+    output = capsys.readouterr().out
+    assert "HANDOFF_INDEX" in output
+    assert "HANDOFF_PROJECT demo" in output
+    handoff = engine / "handoffs" / loopctl.today_date() / "demo.md"
+    assert handoff.exists()
+    assert "Success criteria" in handoff.read_text()
 
 
 def test_approve_writes_daily_focus_and_approval_artifacts(monkeypatch, tmp_path):

@@ -11,6 +11,12 @@
         "github_repo": "operator/tokenpulse",
         "linear_project": "TokenPulse",
         "loop_project_id": "tokenpulse"
+      },
+      "owner_thread": {
+        "id": "thread-tokenpulse-owner",
+        "name": "TokenPulse owner thread",
+        "mode": "codex_thread",
+        "handoff_policy": "manual_copy"
       }
     },
     "newsletter": {

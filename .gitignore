@@ -16,6 +16,7 @@ loop-engine/state.json
 loop-engine/portfolio/
 loop-engine/pm-reviews/
 loop-engine/approvals/
+loop-engine/handoffs/
 loop-engine/human-feedback/
 loop-engine/evening-scorecards/*
 !loop-engine/evening-scorecards/.gitkeep
@@ -33,3 +34,6 @@ dist/
 build/
 venv/
 .venv/
+
+# Loop runtime handoff artifacts.
+.loop/daily-focus/
