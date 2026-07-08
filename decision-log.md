@@ -251,3 +251,38 @@ Keep each pinned Codex Project's cumulative `daily-update.md` durable inside 008
 - The current preservation rule is filename-based: only project-root `daily-update.md` is preserved during know-how sync cleanup.
 - Stale project directories without a preserved project-level file are removed during cleanup; retained thread folders are recreated from `SOURCE_THREADS`.
 - Case-insensitive paths still matter: `Park OS` and `park os`, or `Agent OS` and `agent os`, can resolve to the same folder on this machine.
+
+## 2026-07-08 Daily Closeout v1 Automation
+
+### Objective
+
+Make the Agent OS daily loop close itself mechanically: yesterday's draft, today's evidence, project daily updates, code/docs/website/know-how closeout status, blockers, and tomorrow's draft all land in 008 without creating a separate `journal/` folder.
+
+### Decisions
+
+- Add versioned contracts for the two Agent OS closeout automations.
+  - Rationale: automation prompts should stay short and stable; the detailed rules belong in repo-tracked docs.
+  - Evidence: `docs/know-how-sync-v1.md` owns the 03:00 decision-log/know-how sync contract; `docs/daily-closeout-v1.md` owns the 04:10 daily closeout contract.
+
+- Upgrade the old Project Daily Report automation into Daily Closeout v1 instead of creating a duplicate automation.
+  - Rationale: there should be one owner for the 008 daily closeout path, while pinned Project `daily-update.md` remains a sub-output.
+  - Evidence: automation id `codex-project-daily-report` is now named `Codex Daily Closeout` and runs `python3 scripts/codex_daily_closeout.py --hours 24 --write --json` at 04:10.
+
+- Keep the 03:00 know-how sync separate from 04:10 closeout.
+  - Rationale: know-how generation is an input to daily closeout, not the whole closeout.
+  - Evidence: automation id `codex-session-know-how-refresh` still runs `python3 scripts/codex_session_insights.py --write --json` at 03:00 and now references `docs/know-how-sync-v1.md`.
+
+- Write one global cumulative closeout file under 008.
+  - Rationale: Wendy asked not to create a `journal/` folder; the global closeout should live beside the Project daily updates.
+  - Evidence: `scripts/codex_daily_closeout.py --write` writes `/Users/wendy/park-io/008_codex session insights and decision logs/_daily-closeout.md` and `_daily-closeout-state.json`.
+
+- Make code closeout conservative by default.
+  - Rationale: pinned Projects include public repos, dirty business repos, logs, screenshots, and unknown untracked files; unattended automation must not force commits.
+  - Evidence: Daily Closeout v1 records repo status, safe-looking changes, unknown files, blacklisted files, and issue age, but the deterministic script does not commit or push.
+
+### Gotchas
+
+- `codex-project-daily-report` remains the automation id for continuity, even though the visible name is now `Codex Daily Closeout`.
+- Weekly retrospective / seven-day know-how audit is deliberately out of v1 and stays manual.
+- `docs/north-star.md`, project gate sources, and website publish contract are not yet defined; v1 reports those as `SKIPPED` or `状态未知` rather than inventing them.
+- `_daily-closeout-state.json` is an Obsidian-side runtime ledger for actionable blocker age; it is not a repo source file.
