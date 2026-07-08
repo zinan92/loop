@@ -3,6 +3,7 @@ __pycache__/
 .DS_Store
 .playwright-mcp/
 outputs/
+backups/
 loop-engine/logs/
 loop-engine/locks/
 loop-engine/worktrees/
