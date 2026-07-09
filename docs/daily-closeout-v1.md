@@ -4,13 +4,14 @@ This contract owns the 04:10 Agent OS daily closeout.
 
 ## Purpose
 
-Close the daily loop by connecting yesterday's draft to today's evidence and tomorrow's draft. The closeout is mechanical and evidence-first; it does not make Wendy's strategic choice.
+Close the daily loop by connecting yesterday's draft to today's evidence and tomorrow's draft. The deterministic closeout is mechanical and evidence-first; it does not make Park's strategic choice.
 
 ## Schedule
 
 - 03:00: `Know-How Sync v1`
 - 04:10: `Daily Closeout v1`
 - Weekly retrospective: manual for v1
+- LLM summary review: after the deterministic script writes evidence
 
 ## Outputs
 
@@ -20,7 +21,7 @@ Close the daily loop by connecting yesterday's draft to today's evidence and tom
 
 ## Pinned Projects
 
-Only these projects are in scope until Wendy explicitly adds more:
+Only these projects are in scope until Park explicitly adds more:
 
 - `交易系统`
 - `Park 的内容生产`
@@ -119,7 +120,7 @@ Always produce a draft:
 
 - one main attack
 - at most three auxiliary items
-- label it as draft pending Wendy confirmation
+- label it as draft pending Park confirmation
 
 The draft should be based on unfinished items, current blockers, and today's evidence. It is not the final strategic decision.
 
@@ -141,9 +142,13 @@ Run from `/Users/wendy/Documents/agent自管理`:
 python3 scripts/codex_daily_closeout.py --hours 24 --write --json
 ```
 
+After the command completes, apply `/Users/wendy/Documents/agent自管理/docs/llm-summary-review-v1.md`.
+
 ## Completion Standard
 
 - all eight sections exist in `_daily-closeout.md`
+- the latest `_daily-closeout.md` entry has a CEO/PM summary reviewed by the automation LLM
+- each latest Project `daily-update.md` entry has a CEO/PM summary reviewed by the automation LLM
 - pinned project daily updates were written or explicitly reported blocked
 - code closeout status was recorded
 - unknown files were reported without blocking the report

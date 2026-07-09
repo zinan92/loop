@@ -356,7 +356,7 @@ def portfolio_value_summary(project_outputs: dict[str, str], repo_statuses: list
     blocked = [repo for repo in repo_statuses if repo.status == "BLOCKED"]
     ready = [repo for repo in repo_statuses if repo.status == "READY_FOR_REVIEW"]
     lines = [
-        "- 今天的核心产出是 Agent OS 日闭环能力上线：Wendy 可以在 008 里同时看到 Project daily update、全局 daily closeout、blocker age 和明日草案。",
+        "- 今天的核心产出是 Agent OS 日闭环能力上线：Park 可以在 008 里同时看到 Project daily update、全局 daily closeout、blocker age 和明日草案。",
         f"- 用户价值：CEO/PM 不需要翻 thread 细节，也能知道 {len(project_outputs)} 个 pinned Projects 今天有没有推进、哪里卡住、下一步该核对什么。",
     ]
     if blocked:
@@ -412,7 +412,9 @@ def render_closeout(
         "",
         "### 0. CEO/PM 摘要",
         "",
+        "<!-- llm-summary:start -->",
         *portfolio_value_summary(project_outputs, repo_statuses),
+        "<!-- llm-summary:end -->",
         "",
         "### 1. 北极星对照",
         "",
@@ -421,7 +423,7 @@ def render_closeout(
         lines.extend(
             [
                 f"- 北极星：{north_star}",
-                f"- 今日对照：状态未知（v1 只机械汇总，不替 Wendy 判断战略漂移）。证据：`{NORTH_STAR}`",
+                f"- 今日对照：状态未知（v1 只机械汇总，不替 Park 判断战略漂移）。证据：`{NORTH_STAR}`",
             ]
         )
     else:
@@ -469,22 +471,22 @@ def render_closeout(
     else:
         lines.append("- Blocked / actionable skipped age：SKIPPED（无 active issue）")
     if escalations:
-        lines.append(f"- Escalation：{len(escalations)} 个事项达到 day 3+，需要 Wendy 决策。")
+        lines.append(f"- Escalation：{len(escalations)} 个事项达到 day 3+，需要 Park 决策。")
     else:
         lines.append("- Escalation：SKIPPED（无 day 3+ active issue）")
 
     lines.extend(["", "### 6. 用户视角的今日成果", ""])
     lines.append(
-        "- Wendy 现在可以在 008 中查看 pinned Projects 的最新 daily update，并在 `_daily-closeout.md` 中看到昨日核对、代码状态、know-how 状态和明日草案。"
+        "- Park 现在可以在 008 中查看 pinned Projects 的最新 daily update，并在 `_daily-closeout.md` 中看到昨日核对、代码状态、know-how 状态和明日草案。"
     )
     lines.append("- 如果某个 Project 今天没有用户可见变化，其 Project daily update 会显式记录无活动。")
 
     lines.extend(["", "### 7. 明日 to-do（草案）", ""])
     if active_issues:
         first_issue = next(iter(active_issues.values()))
-        lines.append(f"- 主攻：处理 `{first_issue.get('description')}`（草案，待 Wendy 确认）。")
+        lines.append(f"- 主攻：处理 `{first_issue.get('description')}`（草案，待 Park 确认）。")
     else:
-        lines.append("- 主攻：Wendy 确认明日唯一主线（草案，待确认）。")
+        lines.append("- 主攻：Park 确认明日唯一主线（草案，待确认）。")
     lines.append("- 辅助 1：核对今日 `_daily-closeout.md` 中的状态未知项。")
     lines.append("- 辅助 2：如有可发布成果，再决定是否触发 website/content adapter。")
     lines.append("- 辅助 3：保持 03:00 know-how sync 与 04:10 closeout 分工清晰。")

@@ -312,3 +312,33 @@ Make Daily Closeout readable for Wendy as CEO/PM: lead with product value and de
 - The deterministic script can draft CEO/PM summaries from evidence and project purpose, but a future LLM review layer may still be needed for richer product-language synthesis.
 - Gate source now exists; gate evaluator is still v1 future work, so `状态未知` can remain valid when no fresh evaluator/artifact is available.
 - Evidence tables should stay in the report, but they are appendix material, not the main reader experience.
+
+## 2026-07-09 Park Naming and LLM Summary Review Layer
+
+### Objective
+
+Correct the human/agent identity model and add an LLM review layer so Daily Closeout produces CEO/PM-readable summaries without weakening the evidence ledger.
+
+### Decisions
+
+- Use `Park` as the human user name in reader-facing summaries.
+  - Rationale: Wendy is the agent assistant name, not the human user identity; future summaries should not address Park as Wendy.
+  - Evidence: `docs/north-star.md`, `docs/project-gates-v1.md`, `docs/daily-closeout-v1.md`, `docs/know-how-sync-v1.md`, `scripts/codex_daily_closeout.py`, and `scripts/codex_project_daily_report.py` now use Park in reader-facing text.
+
+- Keep `/Users/wendy/...` filesystem paths unchanged.
+  - Rationale: local path names are machine facts, not user-facing identity labels.
+  - Evidence: scripts still use the real local paths for Codex state, Obsidian 008, and source decision logs.
+
+- Add an explicit LLM summary review contract.
+  - Rationale: deterministic scripts are good at evidence collection, but CEO/PM summaries need product-language synthesis; this should be a bounded post-processing layer.
+  - Evidence: `docs/llm-summary-review-v1.md` allows edits only to the latest `### 0. CEO/PM 摘要` and `### CEO/PM 摘要` sections, and forbids changing evidence tables, commit hashes, paths, thread ids, timestamps, or blocker age.
+
+- Add summary markers for safe post-processing.
+  - Rationale: the LLM layer needs exact edit boundaries so it does not accidentally rewrite evidence.
+  - Evidence: latest closeout and Project daily-update summaries are wrapped in `<!-- llm-summary:start -->` / `<!-- llm-summary:end -->`.
+
+### Gotchas
+
+- Automation id `codex-project-daily-report` still owns the 04:10 closeout, but the prompt now runs two layers: deterministic evidence write, then LLM summary review.
+- The LLM review layer is allowed to improve summary language, but it must not create facts that are absent from evidence.
+- Historical decision-log entries may still mention Wendy because they record prior language; future reader-facing outputs should use Park.

@@ -4,7 +4,7 @@ These gates are the source for Daily Closeout progress reporting. V1 reports gat
 
 ## 交易系统
 
-Purpose: Help Wendy use the gold trading system as a safer, clearer personal trading operating system.
+Purpose: Help Park use the gold trading system as a safer, clearer personal trading operating system.
 
 Gates:
 
@@ -15,7 +15,7 @@ Gates:
 
 ## Park 的内容生产
 
-Purpose: Turn Wendy's ideas and AI-tool experience into publishable content assets.
+Purpose: Turn Park's ideas and AI-tool experience into publishable content assets.
 
 Gates:
 
@@ -25,7 +25,7 @@ Gates:
 
 ## Park OS
 
-Purpose: Keep Wendy's second brain useful by preserving raw thinking and turning it into structured, retrievable knowledge.
+Purpose: Keep Park's second brain useful by preserving raw thinking and turning it into structured, retrievable knowledge.
 
 Gates:
 
@@ -35,7 +35,7 @@ Gates:
 
 ## Agent OS
 
-Purpose: Make Wendy's agent workflows auditable, repeatable, and safe to automate.
+Purpose: Make Park's agent workflows auditable, repeatable, and safe to automate.
 
 Gates:
 

@@ -13,7 +13,7 @@ Keep `/Users/wendy/park-io/008_codex session insights and decision logs` aligned
 - `know-how.md` is an abstraction from the synced decision log only.
 - If a source decision log is missing, report it as skipped; do not fabricate a replacement.
 - Preserve project-root `daily-update.md` files. They are owned by the Daily Closeout pipeline.
-- Weekly or seven-day retrospective judgment is out of v1. Wendy runs that manually for now.
+- Weekly or seven-day retrospective judgment is out of v1. Park runs that manually for now.
 
 ## Command
 

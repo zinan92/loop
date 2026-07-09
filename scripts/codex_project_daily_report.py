@@ -49,10 +49,10 @@ PINNED_PROJECTS = [
 ]
 
 PROJECT_PURPOSES = {
-    "交易系统": "帮助 Wendy 把黄金交易系统变成更安全、更清晰的个人交易操作系统。",
-    "Park 的内容生产": "把 Wendy 的想法和 AI 工具体验转成可发布的内容资产。",
+    "交易系统": "帮助 Park 把黄金交易系统变成更安全、更清晰的个人交易操作系统。",
+    "Park 的内容生产": "把 Park 的想法和 AI 工具体验转成可发布的内容资产。",
     "Park OS": "保存原始思考，并把它变成可检索、可复用的第二大脑资产。",
-    "Agent OS": "让 Wendy 的 agent 工作流可审计、可重复、可安全自动化。",
+    "Agent OS": "让 Park 的 agent 工作流可审计、可重复、可安全自动化。",
     "ai newsletter": "稳定产出有来源健康和归档连续性的 AI/finance intelligence 产品。",
 }
 
@@ -275,13 +275,13 @@ def value_summary(project: str, items: list[ThreadActivity]) -> str:
     joined = " ".join(f"{item.title} {item.request} {item.outcome}" for item in items).lower()
     if project == "交易系统":
         if any(word in joined for word in ["dashboard", "frontend", "前端", "chart", "图表", "console"]):
-            return "交易工作台和可视化体验继续收口，Wendy 更容易从一个界面判断系统状态和交易上下文。"
+            return "交易工作台和可视化体验继续收口，Park 更容易从一个界面判断系统状态和交易上下文。"
         if any(word in joined for word in ["alert", "review", "feishu", "复盘", "告警"]):
-            return "交易系统的日常运行、告警或复盘证据继续沉淀，Wendy 更容易知道系统是否值得信任。"
+            return "交易系统的日常运行、告警或复盘证据继续沉淀，Park 更容易知道系统是否值得信任。"
         return "交易系统继续推进安全、可观察、可复盘的个人交易操作系统。"
     if project == "Agent OS":
         if any(word in joined for word in ["daily closeout", "daily update", "automation", "know-how"]):
-            return "Agent OS 的日闭环和知识沉淀能力增强，Wendy 更少依赖手动回忆昨天做了什么。"
+            return "Agent OS 的日闭环和知识沉淀能力增强，Park 更少依赖手动回忆昨天做了什么。"
         return "Agent OS 继续让跨项目 agent 工作更可审计、更可复用。"
     if project == "Park OS":
         return "Park OS 继续把原始想法变成可保存、可查找、可复用的知识资产。"
@@ -310,9 +310,11 @@ def render_project_entry(project: str, items: list[ThreadActivity], hours: int) 
         "",
         "### CEO/PM 摘要",
         "",
+        "<!-- llm-summary:start -->",
         f"- 项目目的：{PROJECT_PURPOSES.get(project, '未配置项目目的。')}",
         f"- 今日用户价值：{value_summary(project, items)}",
         f"- 状态：{len(items)} 个 thread（人工 {len(manual)}，自动 {len(automated)}）；细节见下方证据。",
+        "<!-- llm-summary:end -->",
         "",
         "### 今日推进",
         "",
