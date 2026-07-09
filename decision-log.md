@@ -368,3 +368,29 @@ Turn Project Gates from a configured source document into visible daily judgment
 - Keyword-based gates are a first pass. They are good enough to show shape, but high-value gates need artifact-specific evaluators.
 - `通过` means the gate had evidence in the closeout window; it does not mean the business outcome improved.
 - A Project with zero thread activity can legitimately show `未通过` for production gates without treating the whole pipeline as failed.
+
+## 2026-07-09 Daily Closeout LLM PM Review Fallback
+
+### Objective
+
+Let the LLM temporarily cover judgment-heavy daily-closeout gaps while keeping deterministic evidence and gate states untouched.
+
+### Decisions
+
+- Add a marked `LLM PM Review` block to the global closeout.
+  - Rationale: North Star alignment, yesterday to-do interpretation, gate unknown explanation, tomorrow attack choice, and content candidate filtering are judgment tasks; they should not block the daily automation while deterministic evaluators mature.
+  - Evidence: `scripts/codex_daily_closeout.py` now writes `<!-- llm-pm-review:start -->` / `<!-- llm-pm-review:end -->` inside `### 0. CEO/PM 摘要`.
+
+- Keep deterministic facts and LLM judgments separated.
+  - Rationale: Park needs a readable PM view, but the ledger must not let the LLM overwrite commits, paths, thread ids, timestamps, blocker age, or gate states.
+  - Evidence: `docs/llm-summary-review-v1.md` now allows edits only inside marked LLM blocks and Project summary blocks.
+
+- Update the 04:10 automation prompt to run two layers.
+  - Rationale: the recurring job should first write evidence, then let the LLM fill the PM Review fallback layer.
+  - Evidence: automation `codex-project-daily-report` now asks Step 2 to fill `llm-summary` and `llm-pm-review` blocks.
+
+### Gotchas
+
+- The LLM PM Review can say `推断，待 Park 确认`; it cannot silently turn inference into fact.
+- The LLM may explain a `状态未知` gate, but it must not relabel it as `通过`.
+- This fallback reduces daily friction, but artifact-specific evaluators are still the durable fix for recurring unknown gates.

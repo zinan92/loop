@@ -1,4 +1,4 @@
-# LLM Summary Review v1
+# LLM Summary Review v2
 
 This contract is the LLM layer after the deterministic Daily Closeout script runs.
 
@@ -10,6 +10,8 @@ The deterministic script answers: what happened and where is the proof?
 
 The LLM review layer answers: what does this mean from a product and user-value perspective?
 
+The LLM layer is allowed to make PM/CEO judgments, but those judgments must stay in explicitly marked LLM sections. It must not rewrite the deterministic evidence ledger.
+
 ## Inputs
 
 - `/Users/wendy/park-io/008_codex session insights and decision logs/_daily-closeout.md`
@@ -20,9 +22,10 @@ The LLM review layer answers: what does this mean from a product and user-value 
 
 ## Allowed Edits
 
-The LLM may edit only the latest entry's summary sections:
+The LLM may edit only the latest entry's marked LLM sections:
 
-- `_daily-closeout.md`: `### 0. CEO/PM 摘要`
+- `_daily-closeout.md`: latest entry `<!-- llm-summary:start -->` to `<!-- llm-summary:end -->`
+- `_daily-closeout.md`: latest entry `<!-- llm-pm-review:start -->` to `<!-- llm-pm-review:end -->`
 - each Project `daily-update.md`: `### CEO/PM 摘要`
 
 The LLM must not edit:
@@ -35,6 +38,7 @@ The LLM must not edit:
 - blocker age
 - automation memory
 - historical entries from prior dates
+- deterministic sections 1-8 except through the marked LLM PM Review block
 
 ## Summary Requirements
 
@@ -60,8 +64,26 @@ Preferred shape:
 
 If there is no user-visible progress, say so directly and state the internal asset that improved.
 
+## PM Review Requirements
+
+The global `LLM PM Review` block is the temporary fallback for pending evaluators. It may analyze:
+
+- North Star alignment: `服务 / 部分服务 / 疑似偏离 / 证据不足`
+- yesterday to-do: `有证据完成 / 部分 / 未找到证据 / 无基线`
+- gate results: explain `未通过` and `状态未知`; do not relabel them
+- tomorrow attack: one main recommendation and at most three supporting checks
+- content candidate: one external-facing topic only if the evidence has standalone reader value
+
+Every PM Review claim must be either:
+
+- backed by a visible evidence section, path, gate row, commit, or thread record; or
+- explicitly labeled `推断，待 Park 确认`
+
+The LLM may fill blanks, but it may not invent facts.
+
 ## Completion Standard
 
 - The latest global closeout entry starts with a useful CEO/PM summary.
+- The latest global closeout entry includes a completed `LLM PM Review` block.
 - Each latest pinned Project update has a useful CEO/PM summary before raw evidence.
 - No evidence values were changed.

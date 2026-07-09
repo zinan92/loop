@@ -38,6 +38,7 @@ Every daily closeout entry must include the CEO/PM summary first, followed by th
    - answer: from a product perspective, what new user value exists today?
    - avoid raw logs, command lists, and thread-title dumps
    - mention only the evidence that matters to a CEO or PM
+   - include an `LLM PM Review` block for judgment-layer fallback
 
 1. 北极星对照
 2. 昨日 to-do 核对
@@ -153,10 +154,21 @@ python3 scripts/codex_daily_closeout.py --hours 24 --write --json
 
 After the command completes, apply `/Users/wendy/Documents/agent自管理/docs/llm-summary-review-v1.md`.
 
+The LLM PM Review is allowed to fill temporary gaps in these pending evaluators:
+
+- North Star alignment
+- yesterday to-do matching
+- gate unknown interpretation
+- tomorrow attack recommendation
+- content candidate filtering
+
+It must keep these as LLM judgments and must not alter evidence, hashes, paths, thread ids, timestamps, blocker age, or deterministic gate states.
+
 ## Completion Standard
 
 - all eight sections exist in `_daily-closeout.md`
 - the latest `_daily-closeout.md` entry has a CEO/PM summary reviewed by the automation LLM
+- the latest `_daily-closeout.md` entry has an `LLM PM Review` block reviewed by the automation LLM
 - each latest Project `daily-update.md` entry has a CEO/PM summary reviewed by the automation LLM
 - pinned project daily updates were written or explicitly reported blocked
 - code closeout status was recorded
