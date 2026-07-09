@@ -30,7 +30,13 @@ Only these projects are in scope until Wendy explicitly adds more:
 
 ## Required Sections
 
-Every daily closeout entry must include these eight sections. Empty sections must say `SKIPPED（原因）`.
+Every daily closeout entry must include the CEO/PM summary first, followed by the eight evidence sections. Empty sections must say `SKIPPED（原因）`.
+
+0. CEO/PM 摘要
+   - one paragraph or 3-5 bullets
+   - answer: from a product perspective, what new user value exists today?
+   - avoid raw logs, command lists, and thread-title dumps
+   - mention only the evidence that matters to a CEO or PM
 
 1. 北极星对照
 2. 昨日 to-do 核对
@@ -40,6 +46,19 @@ Every daily closeout entry must include these eight sections. Empty sections mus
 6. 用户视角的今日成果
 7. 明日 to-do（草案）
 8. 内容候选
+
+## CEO/PM Summary Standard
+
+The closeout is not complete if the first reader-facing section is only a log table.
+
+The summary must answer these questions:
+
+- What did this project or portfolio become able to do today that it could not do yesterday?
+- Which user, operator, or buyer benefits from that change?
+- Is the work product-facing, internal infrastructure, or only maintenance?
+- What is the single most important next product move?
+
+If the answer is "no user-visible change", say that directly and explain what internal asset was improved.
 
 ## Code Closeout
 
@@ -103,6 +122,16 @@ Always produce a draft:
 - label it as draft pending Wendy confirmation
 
 The draft should be based on unfinished items, current blockers, and today's evidence. It is not the final strategic decision.
+
+## Gate Source
+
+Use `/Users/wendy/Documents/agent自管理/docs/project-gates-v1.md` as the v1 gate source. A gate can be:
+
+- `通过`: evidence shows the gate is satisfied in the closeout window
+- `未通过`: evidence shows the gate is broken or stale
+- `状态未知`: the gate exists, but no evaluator or fresh artifact was found
+
+Do not report `未配置` unless the project is missing from `project-gates-v1.md`.
 
 ## Command
 

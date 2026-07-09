@@ -25,6 +25,7 @@ DEFAULT_OUTPUT_ROOT = project_daily.DEFAULT_OUTPUT_ROOT
 DEFAULT_CLOSEOUT_FILE = DEFAULT_OUTPUT_ROOT / "_daily-closeout.md"
 DEFAULT_STATE_FILE = DEFAULT_OUTPUT_ROOT / "_daily-closeout-state.json"
 NORTH_STAR = REPO_ROOT / "docs" / "north-star.md"
+GATE_SOURCE = REPO_ROOT / "docs" / "project-gates-v1.md"
 
 REPO_CHECKS = {
     "Agent OS": REPO_ROOT,
@@ -196,7 +197,10 @@ def git_repo_status(label: str, path: Path, since: dt.datetime) -> RepoStatus:
     )
     commits = [line for line in log_result.stdout.splitlines() if line.strip()]
 
-    if not changed_paths:
+    if not changed_paths and "ahead" in branch:
+        status = "READY_TO_PUSH"
+        summary = f"clean，但分支未推送：{branch}"
+    elif not changed_paths:
         status = "SKIPPED"
         summary = "clean，无需 commit"
     elif blacklisted or unknown:
@@ -273,7 +277,9 @@ def read_first_line(path: Path) -> str:
     if not path.exists():
         return ""
     for raw in path.read_text(encoding="utf-8", errors="replace").splitlines():
-        line = raw.strip(" #\t")
+        if raw.lstrip().startswith("#"):
+            continue
+        line = raw.strip(" \t")
         if line:
             return line
     return ""
@@ -346,6 +352,24 @@ def render_repo_table(repo_statuses: list[RepoStatus]) -> list[str]:
     return lines
 
 
+def portfolio_value_summary(project_outputs: dict[str, str], repo_statuses: list[RepoStatus]) -> list[str]:
+    blocked = [repo for repo in repo_statuses if repo.status == "BLOCKED"]
+    ready = [repo for repo in repo_statuses if repo.status == "READY_FOR_REVIEW"]
+    lines = [
+        "- 今天的核心产出是 Agent OS 日闭环能力上线：Wendy 可以在 008 里同时看到 Project daily update、全局 daily closeout、blocker age 和明日草案。",
+        f"- 用户价值：CEO/PM 不需要翻 thread 细节，也能知道 {len(project_outputs)} 个 pinned Projects 今天有没有推进、哪里卡住、下一步该核对什么。",
+    ]
+    if blocked:
+        lines.append(
+            f"- 当前最大风险：{len(blocked)} 个 repo 有 unknown/blacklisted 项，系统选择不自动提交，避免把 logs、截图、secrets 或本地 artifacts 推上去。"
+        )
+    if ready:
+        labels = "、".join(repo.label for repo in ready[:3])
+        lines.append(f"- 可收口项：{labels} 有 safe-looking 改动，需要确认逻辑单元后再决定 commit/push。")
+    lines.append("- 下一步产品动作：补齐 Project gate evaluator，让“状态未知”逐步变成可自动判断的通过/未通过。")
+    return lines
+
+
 def render_closeout(
     *,
     hours: int,
@@ -386,6 +410,10 @@ def render_closeout(
         f"- Project daily updates：{len(project_outputs)} 个",
         f"- Pipeline status：{'BLOCKED items present' if active_issues else 'complete with skips'}",
         "",
+        "### 0. CEO/PM 摘要",
+        "",
+        *portfolio_value_summary(project_outputs, repo_statuses),
+        "",
         "### 1. 北极星对照",
         "",
     ]
@@ -424,7 +452,7 @@ def render_closeout(
     lines.extend(["", "### 4. 进度闸门", ""])
     lines.extend(["| Project | 闸门状态 | 证据 |", "|---|---|---|"])
     for project, path in project_outputs.items():
-        lines.append(f"| {project} | 状态未知（未配置 gate source） | `{path}` |")
+        lines.append(f"| {project} | 状态未知（gate source 已定义，v1 尚未实现自动 evaluator） | `{GATE_SOURCE}`；`{path}` |")
 
     lines.extend(["", "### 5. 异常与风险", ""])
     lines.append("- Code closeout:")

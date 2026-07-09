@@ -286,3 +286,29 @@ Make the Agent OS daily loop close itself mechanically: yesterday's draft, today
 - Weekly retrospective / seven-day know-how audit is deliberately out of v1 and stays manual.
 - `docs/north-star.md`, project gate sources, and website publish contract are not yet defined; v1 reports those as `SKIPPED` or `状态未知` rather than inventing them.
 - `_daily-closeout-state.json` is an Obsidian-side runtime ledger for actionable blocker age; it is not a repo source file.
+
+## 2026-07-09 Daily Closeout CEO/PM Report Correction
+
+### Objective
+
+Make Daily Closeout readable for Wendy as CEO/PM: lead with product value and decision-useful progress, while keeping raw logs only as evidence.
+
+### Decisions
+
+- Add a minimal Agent OS North Star.
+  - Rationale: `北极星对照` should not be skipped forever; it needs a short, auditable product objective rather than a large strategy exercise.
+  - Evidence: `docs/north-star.md` defines Agent OS as the daily closure system for multi-project AI work.
+
+- Add v1 Project Gates.
+  - Rationale: `状态未知（未配置 gate source）` is not actionable; the gate source should exist even before automatic evaluators are implemented.
+  - Evidence: `docs/project-gates-v1.md` defines purpose and gates for `交易系统`, `Park 的内容生产`, `Park OS`, `Agent OS`, and `ai newsletter`.
+
+- Move CEO/PM summary ahead of evidence tables in closeout and project updates.
+  - Rationale: Wendy needs to know what user value changed today, not read thread-title logs.
+  - Evidence: `_daily-closeout.md` now starts with `### 0. CEO/PM 摘要`; Project `daily-update.md` entries now include `### CEO/PM 摘要` before raw thread sections.
+
+### Gotchas
+
+- The deterministic script can draft CEO/PM summaries from evidence and project purpose, but a future LLM review layer may still be needed for richer product-language synthesis.
+- Gate source now exists; gate evaluator is still v1 future work, so `状态未知` can remain valid when no fresh evaluator/artifact is available.
+- Evidence tables should stay in the report, but they are appendix material, not the main reader experience.
