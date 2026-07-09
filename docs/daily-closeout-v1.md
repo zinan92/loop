@@ -134,6 +134,15 @@ Use `/Users/wendy/Documents/agent自管理/docs/project-gates-v1.md` as the v1 g
 
 Do not report `未配置` unless the project is missing from `project-gates-v1.md`.
 
+The v1 evaluator is intentionally conservative. It may use:
+
+- latest Project `daily-update.md` entry text
+- repo closeout status
+- automation memory freshness
+- configured output file existence
+
+It must not infer business success from implementation activity alone.
+
 ## Command
 
 Run from `/Users/wendy/Documents/agent自管理`:

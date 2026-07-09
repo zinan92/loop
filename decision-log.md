@@ -342,3 +342,29 @@ Correct the human/agent identity model and add an LLM review layer so Daily Clos
 - Automation id `codex-project-daily-report` still owns the 04:10 closeout, but the prompt now runs two layers: deterministic evidence write, then LLM summary review.
 - The LLM review layer is allowed to improve summary language, but it must not create facts that are absent from evidence.
 - Historical decision-log entries may still mention Wendy because they record prior language; future reader-facing outputs should use Park.
+
+## 2026-07-09 Daily Closeout Gate Evaluator v1
+
+### Objective
+
+Turn Project Gates from a configured source document into visible daily judgments so Park can see which product dimensions passed, failed, or still lack evidence.
+
+### Decisions
+
+- Add a conservative gate evaluator inside `scripts/codex_daily_closeout.py`.
+  - Rationale: Project gates are only useful if the closeout shows a per-gate status instead of one blanket `状态未知` per Project.
+  - Evidence: `evaluate_project_gates()` now emits one row per gate with `通过`, `未通过`, `状态未知`, or `未配置`.
+
+- Use existing evidence only.
+  - Rationale: v1 should not invent product progress; it should classify what the existing closeout can already prove.
+  - Evidence: evaluator inputs are latest Project `daily-update.md`, repo closeout status, automation memory freshness, and output file existence.
+
+- Keep unknown as a valid output.
+  - Rationale: if a gate needs a real artifact-specific check, the correct answer is `状态未知`, not optimistic wording.
+  - Evidence: newsletter archive/source-health and trading execution-readiness can remain `状态未知` until their artifacts are wired.
+
+### Gotchas
+
+- Keyword-based gates are a first pass. They are good enough to show shape, but high-value gates need artifact-specific evaluators.
+- `通过` means the gate had evidence in the closeout window; it does not mean the business outcome improved.
+- A Project with zero thread activity can legitimately show `未通过` for production gates without treating the whole pipeline as failed.
