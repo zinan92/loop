@@ -40,6 +40,7 @@ def patch_engine(monkeypatch, tmp_path, repo):
     monkeypatch.setattr(loopctl, "LOCK_DIR", engine / "locks")
     monkeypatch.setattr(loopctl, "CONFIG_DIR", tmp_path / "config")
     monkeypatch.setattr(loopctl, "CONFIG_PATH", tmp_path / "config" / "config.json")
+    monkeypatch.setattr(loopctl, "sync_park_operating_system", lambda: None)
     monkeypatch.setattr(loopctl, "scheduler_status_payload", lambda project: {
         "label": f"com.agent-loop.{project}",
         "plist": str(tmp_path / "noop.plist"),
@@ -885,13 +886,33 @@ def test_start_day_runs_medium_first_cycle_supervised(monkeypatch, tmp_path):
     })
     monkeypatch.setattr(loopctl, "load_scheduler", lambda project: calls.append(("load", project)))
     monkeypatch.setattr(loopctl, "send_notification", lambda *args, **kwargs: False)
+    monkeypatch.setattr(loopctl, "sync_park_operating_system", lambda: calls.append(("sync", "park-operating-system")))
 
     loopctl.start_day_command(["demo"])
 
+    assert calls[0] == ("sync", "park-operating-system")
     assert ("demo", True) in calls
     assert ("load", "demo") in calls
     state = loopctl.load_state()["projects"]["demo"]
     assert state["loop_job"]["state"] == "active"
+
+
+def test_sync_park_operating_system_pulls_expected_checkout(monkeypatch, tmp_path, capsys):
+    checkout = tmp_path / "park-operating-system"
+    (checkout / ".git").mkdir(parents=True)
+    calls = []
+
+    def fake_run(cmd, cwd, check=True, log_path=None):
+        calls.append((cmd, cwd, check))
+        return subprocess.CompletedProcess(cmd, 0, stdout="Already up to date.\n", stderr="")
+
+    monkeypatch.setattr(loopctl, "PARK_OPERATING_SYSTEM_DIR", checkout)
+    monkeypatch.setattr(loopctl, "run", fake_run)
+
+    loopctl.sync_park_operating_system()
+
+    assert calls == [(["git", "-C", str(checkout), "pull"], loopctl.ENGINE_ROOT, False)]
+    assert f"PARK_OPERATING_SYSTEM_SYNCED path={checkout}" in capsys.readouterr().out
 
 
 def test_evening_writes_scorecard_and_daily_report(monkeypatch, tmp_path):
