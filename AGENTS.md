@@ -6,7 +6,7 @@
 ## What loop is (for you)
 
 `loop` is a daily product operating loop around a private portfolio registry and local Git repos:
-`portfolio intake → portfolio verification → morning review → project-owner handoff → approval envelope → planner → value/risk gates → worker (isolated worktree) → verification (sandboxed) → reviewer → auto PR + merge → digest → evening scorecard → memory`.
+`portfolio intake → portfolio verification → morning review → project-owner handoff → approval envelope → planner → value/risk gates → worker (isolated worktree) → verification (sandboxed) → reviewer → auto PR → Park merge → digest → evening scorecard → memory`.
 You operate it through the `loop` CLI (or `python3 loop-engine/bin/loopctl.py <cmd> --project <id>`). You do **not** edit the engine, prompts, or reviewer output to influence outcomes.
 
 ## First, relay these safety facts to your human
@@ -15,8 +15,8 @@ Before the human starts `loop` (especially unattended), tell them, plainly:
 
 1. The engine process runs with their **full OS user permissions** and reads their real secret files (`~/.config/loop/secrets`, `~/.ssh`, `~/.aws`, …) to scan for leaks.
 2. File access is confined per provider: **Codex** confines *writes* to the worktree (`--sandbox workspace-write`; reads stay broad); **Claude Code** confines reads, writes, and Bash to the worktree + run dir via its own headless sandbox — the engine **rejects** unsafe permission modes for Claude (`bypassPermissions` raises an error) so config can't disable it. All agents get a scrubbed env (no secret env vars). `sandbox-exec` additionally wraps verification commands (network denied).
-3. A reviewer `pass` triggers **autonomous `gh pr merge`** into the pilot branch — there is **no human gate** between review-pass and merge.
-4. `loop start` runs **hourly, forever**, until `loop stop`; each passing cycle may create and merge a PR.
+3. A reviewer `pass` opens a PR and pauses the loop with `human_merge_required`; **only Park reviews and merges**.
+4. `loop start` runs **hourly, forever**, until `loop stop`; a passing cycle may create a PR, then waits for Park.
 5. **macOS only** (Codex or Claude Code, set per role — see Compatibility in the README). Without `sandbox-exec`, verification fails closed and no cycle can complete.
 
 ## How to operate it
@@ -53,11 +53,12 @@ Before the human starts `loop` (especially unattended), tell them, plainly:
 | `trading_requires_manual_approval` | trading-project work was not clearly read-only/backtest/data-quality review | approve and run manually; live/broker/money paths stay high risk |
 | `high_risk_requires_approval` | a high-risk candidate was surfaced | stays manual — never auto-run |
 | `unsupported_risk` | issue risk field wasn't `low` or `medium` | fix the issue's `## Risk` |
-| `task_gated` | worker/reviewer/merge raised an exception | inspect `task-error.txt` + logs before retrying |
+| `task_gated` | worker/reviewer/PR creation raised an exception | inspect `task-error.txt` + logs before retrying |
+| `human_merge_required` | reviewer passed and the PR is open | Park reviews/merges the PR, then runs `loop resume` |
 
 **`runs[-1].control_gate.reason`** — why the loop *paused* (the gated items themselves, if any, are in `waiting_for_human`): `higher_value_item_requires_approval` (decide the high-value item; `loop resume`), `no_auto_executable_candidates` / `all_candidates_gated` (every candidate needs approval), `stop_condition_met` / `recommended_cycles_exhausted` (intended end of the day's budget).
 
-> A failed auto-merge is **not** a reason code: the cycle ends `needs_human` with the task marked `pass` but no merged PR — inspect the run log / `cycle-summary.json` and resolve the conflict on the pilot branch.
+> `human_merge_required` is the normal successful handoff: the cycle ends `needs_human`, the task is `awaiting_human_merge`, and the loop stays paused until Park reviews the PR.
 
 `LOOP_BLOCKED` reasons from daily setup: `portfolio_missing` means first daily PM review or intake needs `loop portfolio init` + `loop portfolio add ...`; `portfolio_no_review_projects` means every portfolio entry has `default_review=false`. `LOOP_BLOCKED` reasons from `loop init` / approved init-loop (no mutation occurs): `not_git_repo`, `missing_github_remote`, `missing_github_auth`, `github_repo_not_found`, `unsupported_platform` (no sandbox-exec / non-macOS), `missing_linear_team` (only when Linear is explicitly enabled). Run `loop doctor` to preflight init prerequisites.
 
@@ -110,7 +111,7 @@ gates:                      # in cycle order
   - reviewer: REVIEW_STATUS must be exactly pass | fail | needs_human
 
 auto_execute: { low: true, medium: "same-day morning envelope + first supervised execution", high: false }
-auto_merge: true            # reviewer pass → gh pr merge --merge --delete-branch (no human gate)
+auto_merge: false           # reviewer pass → open PR + pause; Park is the only merger
 
 risk_model:
   task_level: true

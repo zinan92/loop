@@ -28,9 +28,9 @@ fail  unsafe task or untrusted verification            → waiting_for_human, ga
 fail  a higher-value item needs approval               → pause before doing lower-value work
 ```
 
-> **中文一句话：** `loop` 是一个**控制平面**——它驱动一个 coding agent（Codex 或 Claude Code，可按角色配）在你的项目上**自己找活、按价值排序、跑通验证、开 PR、合并、写复盘**，每一步都有闸门和审计，随时可暂停。它的设计偏保守：**宁可这一轮什么都不做，也不硬找低价值的活**。
+> **中文一句话：** `loop` 是一个**控制平面**——它驱动一个 coding agent（Codex 或 Claude Code，可按角色配）在你的项目上**自己找活、按价值排序、跑通验证、开 PR、等待 Park 合并、写复盘**，每一步都有闸门和审计，随时可暂停。它的设计偏保守：**宁可这一轮什么都不做，也不硬找低价值的活**。
 >
-> **In one line:** `loop` is a **control plane** that drives a coding agent (Codex or Claude Code, configurable per role) to find work on your repo, rank it by value, pass verification, open and merge a PR, and write a recap — every step gated and auditable, pausable at any time. It is deliberately conservative: a cycle may correctly do **nothing** rather than invent low-value busywork.
+> **In one line:** `loop` is a **control plane** that drives a coding agent (Codex or Claude Code, configurable per role) to find work on your repo, rank it by value, pass verification, open a PR for Park to merge, and write a recap — every step gated and auditable, pausable at any time. It is deliberately conservative: a cycle may correctly do **nothing** rather than invent low-value busywork.
 
 ---
 
@@ -45,11 +45,11 @@ fail  a higher-value item needs approval               → pause before doing lo
 2. **每个 agent 都被关在 worktree 里;验证命令再额外走 sandbox-exec / Each agent is confined to the worktree; verification adds sandbox-exec.**
    Verification commands run under `sandbox-exec` with **network denied** and secret dirs denied. The planner/worker/reviewer get a **scrubbed environment** (no secret env vars). File access is confined per provider: **Codex** limits *writes* to the worktree via `--sandbox workspace-write` (its reads stay broad); **Claude Code** limits reads, writes, **and** Bash to the worktree + run dir via its own headless sandbox — and the engine **rejects** unsafe permission modes for Claude (`bypassPermissions` raises an error) so config can't disable it. Either way, the post-worker allowlist + secret-leak scan (provider-agnostic) catch anything out of scope before merge.
 
-3. **reviewer 通过 = 自动合并，中间没有人工复核 / Reviewer pass = auto-merge, no human gate.**
-   When the reviewer returns `REVIEW_STATUS: pass`, the engine **autonomously** opens a PR and runs `gh pr merge --merge --delete-branch` into the pilot branch. (The GitHub issue itself is created earlier, at the start of the worker phase.) There is no separate human approval step between "reviewer pass" and "merged".
+3. **reviewer 通过 = 自动开 PR，Park 唯一合并 / Reviewer pass = open PR, Park merges.**
+   When the reviewer returns `REVIEW_STATUS: pass`, the engine opens a PR, records `human_merge_required`, and pauses. The GitHub issue is created earlier in the worker phase; only Park reviews and merges the PR.
 
 4. **`loop start` 是每小时一轮、跑到你喊停 / `loop start` runs hourly, forever.**
-   The cadence is fixed at one cycle per hour until `loop stop`. Each passing cycle can create **and merge** a PR. Use `loop pause` / `loop stop` to halt.
+   The cadence is fixed at one cycle per hour until `loop stop`. A passing cycle opens a PR and then pauses for Park. Use `loop pause` / `loop stop` to halt.
 
 5. **scheduler 是用户态守护进程，不是 launchd/cron / The scheduler is a user-space daemon.**
    It does **not** install launchd, cron, or login autostart, and does **not** survive a reboot. `loop stop` (or `scheduler uninstall`) turns it off.
@@ -160,7 +160,7 @@ trigger (run-now | hourly tick)
                  └─ verify  trusted commands under sandbox-exec (network denied, secrets denied)
                       └─ allowlist + secret-leak scan (fail-closed)
                            └─ reviewer  must emit REVIEW_STATUS: pass | fail | needs_human
-                                └─ on pass: open PR + merge --delete-branch  (auto)
+                                └─ on pass: open PR + pause → Park reviews and merges
                                      └─ Linear milestone (if enabled) → cycle-summary → digest → memory
 ```
 
@@ -324,7 +324,7 @@ loop notify test
 loop notify status
 ```
 
-The engine notifies only high-signal events by default: `loop_started`, `needs_human`, merged work, and evening recap completion. Every notification attempt is also recorded in `loop-engine/logs/notifications.jsonl`.
+The engine notifies only high-signal events by default: `loop_started`, `needs_human` (including an open PR awaiting Park), and evening recap completion. Every notification attempt is also recorded in `loop-engine/logs/notifications.jsonl`.
 
 ### Output language / 输出语言
 
@@ -372,11 +372,12 @@ Per-item `waiting_for_human[].reason`:
 | `trading_requires_manual_approval` | trading-project work was not clearly read-only/backtest/data-quality review | approve and run manually; live/broker/money paths stay high risk |
 | `high_risk_requires_approval` | a high-risk candidate was surfaced | stays manual — never auto-run |
 | `unsupported_risk` | the issue's risk field wasn't `low` or `medium` | fix the issue's `## Risk` |
-| `task_gated` | worker/reviewer/merge raised an exception | inspect `task-error.txt` + logs before retrying |
+| `task_gated` | worker/reviewer/PR creation raised an exception | inspect `task-error.txt` + logs before retrying |
+| `human_merge_required` | reviewer passed and the PR is open | Park reviews/merges the PR, then runs `loop resume` |
 
 Control-plane `control_gate.reason` (why the loop paused — the gated items, if any, are in `waiting_for_human`): `higher_value_item_requires_approval` (decide the high-value item → `loop resume`), `no_auto_executable_candidates` / `all_candidates_gated` (every candidate needs approval), `stop_condition_met` / `recommended_cycles_exhausted` (intended end of today's budget).
 
-> A failed auto-merge is **not** a reason code: the cycle ends `needs_human` with the task marked `pass` but no merged PR — check the run log / `cycle-summary.json` and resolve the conflict on the pilot branch.
+> `human_merge_required` is the normal successful handoff: the cycle ends `needs_human`, the task is `awaiting_human_merge`, and the loop remains paused until Park reviews the PR.
 
 Morning/day-start `LOOP_BLOCKED` reasons: `portfolio_missing` means run `loop portfolio init` and add at least one project; `portfolio_no_review_projects` means every portfolio entry has `default_review=false`; `no_daily_approvals` means run `loop morning` then `loop approve <project>`; `not_approved_today` means the named project was not approved in today's approval artifact.
 

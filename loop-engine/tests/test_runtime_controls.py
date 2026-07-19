@@ -72,6 +72,26 @@ def test_status_payload_includes_digest_paths(monkeypatch, tmp_path):
     assert payload["digest"]["html"].endswith("reports/demo/latest.html")
 
 
+def test_passed_task_pr_reports_open_pr_without_merge_side_effects(monkeypatch, tmp_path):
+    task_dir = tmp_path / "task"
+    task_dir.mkdir()
+    (task_dir / "github-pr.log").write_text("https://github.com/acme/demo/pull/42\n")
+    (task_dir / "github-issue-url.txt").write_text("https://github.com/acme/demo/issues/7\n")
+    monkeypatch.setattr(
+        loopctl,
+        "run",
+        lambda *args, **kwargs: pytest.fail("passed_task_pr must not run merge or issue-close commands"),
+    )
+
+    result = loopctl.passed_task_pr(task_dir)
+
+    assert result == {
+        "pr_open": True,
+        "pr": "https://github.com/acme/demo/pull/42",
+        "issue": "https://github.com/acme/demo/issues/7",
+    }
+
+
 def test_project_lock_blocks_second_holder(monkeypatch, tmp_path):
     _patch_state(monkeypatch, tmp_path)
     with loopctl.with_project_lock("demo"):

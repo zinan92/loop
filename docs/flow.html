@@ -164,8 +164,8 @@
     <div class="stage auto">
       <div class="num">6</div>
       <div class="body">
-        <div class="h">PR + merge <span class="tag aut">automatic</span></div>
-        <div class="x">On pass, the engine opens a PR and runs <span class="mono">gh pr merge --delete-branch</span> into the pilot branch — <b style="color:#bc8cff">no human gate here</b>.<br><span style="color:#6e7681">reviewer 通过 = 自动开 PR 并合并，中间没有人工复核</span></div>
+        <div class="h">Open PR <span class="tag aut">automatic</span> · Merge <span class="tag hum">Park</span></div>
+        <div class="x">On pass, the engine opens a PR, records <span class="mono">human_merge_required</span>, and pauses. <b style="color:#bc8cff">Only Park reviews and merges.</b><br><span style="color:#6e7681">reviewer 通过 = 自动开 PR 并暂停；Park 是唯一合并方</span></div>
       </div>
     </div>
 
