@@ -2996,7 +2996,7 @@ def github_number(url: str) -> str | None:
     return match.group(2) if match else None
 
 
-def merge_passed_task(cfg: dict, task_dir: Path, branch: str) -> dict:
+def passed_task_pr(task_dir: Path) -> dict:
     pr_log = task_dir / "github-pr.log"
     pr_url = ""
     if pr_log.exists():
@@ -3004,47 +3004,9 @@ def merge_passed_task(cfg: dict, task_dir: Path, branch: str) -> dict:
         pr_url = match.group(0) if match else ""
     issue_path = task_dir / "github-issue-url.txt"
     issue_url = issue_path.read_text().strip() if issue_path.exists() else ""
-    pr_number = github_number(pr_url) if pr_url else None
-    issue_number = github_number(issue_url) if issue_url else None
-    if not pr_number:
-        return {"merged": False, "pr": pr_url, "issue": issue_url, "reason": "missing_pr"}
-    merge_log = task_dir / "github-pr-merge.log"
-    merge = run(
-        [
-            "gh",
-            "pr",
-            "merge",
-            pr_number,
-            "--repo",
-            cfg["github_repo"],
-            "--merge",
-            "--delete-branch",
-        ],
-        cwd=Path(cfg["repo_path"]),
-        log_path=merge_log,
-        check=False,
-    )
-    if merge.returncode != 0:
-        return {"merged": False, "pr": pr_url, "issue": issue_url, "reason": "merge_failed"}
-    if issue_number:
-        run(
-            [
-                "gh",
-                "issue",
-                "close",
-                issue_number,
-                "--repo",
-                cfg["github_repo"],
-                "--comment",
-                f"Closed after PR #{pr_number} was merged by the loop.",
-            ],
-            cwd=Path(cfg["repo_path"]),
-            log_path=task_dir / "github-issue-close.log",
-            check=False,
-        )
-    run(["git", "fetch", "origin", cfg["pilot_branch"]], cwd=Path(cfg["repo_path"]))
-    run(["git", "pull", "--ff-only"], cwd=Path(cfg["repo_path"]), check=False)
-    return {"merged": True, "pr": pr_url, "issue": issue_url}
+    if not github_number(pr_url):
+        return {"pr_open": False, "pr": pr_url, "issue": issue_url, "reason": "missing_pr"}
+    return {"pr_open": True, "pr": pr_url, "issue": issue_url}
 
 
 def set_phase(project: str, phase: str, run_id: str | None = None) -> None:
@@ -3210,6 +3172,7 @@ def waiting_item(run_id: str, index: int, item: dict) -> dict:
         "blocked_category": "Review the issue manually; the planner touched a category reserved for human approval.",
         "max_tasks_per_cycle": "Leave queued for a future cycle or explicitly approve manual execution.",
         "task_gated": "Inspect task-error.txt, worker logs, and reviewer report before retrying.",
+        "human_merge_required": "Review and merge the open PR as Park, then resume the loop.",
         "medium_risk_requires_approval": "Approve a bounded medium-risk envelope in the Daily PM Review before execution.",
         "medium_risk_requires_supervised_run": "Run `loop run-now --supervised` only while watching the first execution.",
         "medium_envelope_violation": "Tighten the issue to the preapproved file and verification envelope, or reject it.",
@@ -6273,7 +6236,7 @@ def cycle(project: str, locked: bool = True, supervised: bool = False) -> dict:
             github_issue = None
             worktree_path = None
             task_branch = None
-            merge_result: dict = {"merged": False}
+            pr_result: dict = {"pr_open": False}
             result_status = "needs_human"
             try:
                 set_phase(project, f"worker:{task_id}", run_id)
@@ -6283,9 +6246,15 @@ def cycle(project: str, locked: bool = True, supervised: bool = False) -> dict:
                 branch = task_branch
                 set_phase(project, f"reviewer:{task_id}", run_id)
                 status = reviewer(project, cfg, task_dir, issue_path, worktree_path, task_branch)
-                set_phase(project, f"merge:{task_id}", run_id)
-                merge_result = merge_passed_task(cfg, task_dir, task_branch) if status == "pass" else {"merged": False}
-                result_status = "merged" if merge_result.get("merged") else status
+                set_phase(project, f"pr_open:{task_id}", run_id)
+                pr_result = passed_task_pr(task_dir) if status == "pass" else {"pr_open": False}
+                result_status = "awaiting_human_merge" if pr_result.get("pr_open") else status
+                if pr_result.get("pr_open"):
+                    waiting_for_human.append({
+                        "issue_path": str(issue_path),
+                        "reason": "human_merge_required",
+                        "github_pr": pr_result.get("pr"),
+                    })
             except Exception as task_exc:
                 (task_dir / "task-error.txt").write_text(str(task_exc) + "\n")
                 result_status = "needs_human"
@@ -6303,7 +6272,7 @@ def cycle(project: str, locked: bool = True, supervised: bool = False) -> dict:
                 "status": result_status,
                 "branch": task_branch,
                 "github_issue": github_issue,
-                "github_pr": merge_result.get("pr"),
+                "github_pr": pr_result.get("pr"),
             })
             linear_comment(
                 cfg,
@@ -6314,7 +6283,7 @@ def cycle(project: str, locked: bool = True, supervised: bool = False) -> dict:
                 f"- Status: `{result_status}`\n"
                 f"- Branch: `{task_branch}`\n"
                 f"- GitHub issue: {github_issue or 'not created'}\n"
-                f"- GitHub PR: {merge_result.get('pr') or 'not created'}",
+                f"- GitHub PR: {pr_result.get('pr') or 'not created'}",
             )
             linear_update_milestone(
                 cfg,
@@ -6324,8 +6293,10 @@ def cycle(project: str, locked: bool = True, supervised: bool = False) -> dict:
                 "task-result",
             )
         run(["git", "worktree", "prune"], cwd=repo_path, check=False)
-        merged_ok = bool(task_results) and all(task["status"] == "merged" for task in task_results)
-        final_status = "merged" if merged_ok and not waiting_for_human else "needs_human"
+        awaiting_merge = bool(task_results) and all(
+            task["status"] == "awaiting_human_merge" for task in task_results
+        )
+        final_status = "needs_human"
         return finish_controlled_cycle(
             project,
             cfg,
@@ -6336,6 +6307,12 @@ def cycle(project: str, locked: bool = True, supervised: bool = False) -> dict:
             task_results,
             waiting_for_human,
             milestone_id,
+            control_gate={
+                "reason": "human_merge_required",
+                "action": "paused_loop",
+                "detail": "Reviewer passed and the PR is open; Park must review and merge it.",
+            } if awaiting_merge else None,
+            pause_reason="human_merge_required" if awaiting_merge else None,
         )
     except Exception as exc:
         (run_dir / "error.txt").write_text(str(exc) + "\n")
