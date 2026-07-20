@@ -88,6 +88,7 @@ DEFAULT_MAX_NOOP_CYCLES = 2
 CONFIG_DIR = Path(os.environ.get("LOOP_CONFIG_DIR", str(Path.home() / ".config" / "loop"))).expanduser()
 CONFIG_PATH = CONFIG_DIR / "config.json"
 PORTFOLIO_MODES = {"loop", "plan-only", "read-only", "hold"}
+PARK_OPERATING_SYSTEM_DIR = Path.home() / "work" / "park-operating-system"
 
 
 class LoopBlocked(RuntimeError):
@@ -5554,12 +5555,34 @@ def activate_without_immediate_tick(project: str) -> None:
     schedule_next_cycle(project)
 
 
+def sync_park_operating_system() -> None:
+    if not (PARK_OPERATING_SYSTEM_DIR / ".git").is_dir():
+        raise LoopBlocked(
+            "park_operating_system_missing",
+            f"Park Operating System checkout is missing: {PARK_OPERATING_SYSTEM_DIR}",
+            {"next_action": f"clone zinan92/park-operating-system to {PARK_OPERATING_SYSTEM_DIR}"},
+        )
+    result = run(
+        ["git", "-C", str(PARK_OPERATING_SYSTEM_DIR), "pull"],
+        cwd=ENGINE_ROOT,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise LoopBlocked(
+            "park_operating_system_sync_failed",
+            "Could not refresh Park Operating System before start-day.",
+            {"stderr": result.stderr.strip()[-1000:]},
+        )
+    print(f"PARK_OPERATING_SYSTEM_SYNCED path={PARK_OPERATING_SYSTEM_DIR}")
+
+
 def start_day_command(projects: list[str] | None) -> None:
     approvals = load_latest_approvals()
     approved = approvals.get("approved") or {}
     selected = projects or sorted(approved.keys())
     if not selected:
         raise LoopBlocked("no_daily_approvals", "No approved projects found for today. Run loop morning, then loop approve <project>.")
+    operating_system_synced = False
     for project in selected:
         if project not in approved:
             raise LoopBlocked("not_approved_today", f"Project {project!r} is not approved for today's loop start.")
@@ -5569,6 +5592,9 @@ def start_day_command(projects: list[str] | None) -> None:
                 f"Project {project!r} was approved only for loop initialization; run loop morning and approve execution before start-day.",
                 {"project": project, "next_actions": ["loop morning", f"loop approve {project}"]},
             )
+        if not operating_system_synced:
+            sync_park_operating_system()
+            operating_system_synced = True
         registry_project(project)
         medium = approved[project].get("medium_envelope")
         if medium and not approved[project].get("medium_first_supervised_at"):

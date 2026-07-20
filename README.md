@@ -137,7 +137,7 @@ loop approve <project> --medium-envelope primary-surface \
   --verification-command 'git diff --check'
 
 # 7) Start the approved day loop
-loop start-day                       # first cycle now, then hourly until stop/pause/budget
+loop start-day                       # pull Park Operating System, then first cycle now and hourly
 
 # 8) Evening recap
 loop evening                         # pauses all active registered loops, writes scorecards + daily report
