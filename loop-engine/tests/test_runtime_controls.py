@@ -181,6 +181,28 @@ def test_codex_exec_uses_workspace_sandbox_and_scrubbed_env(monkeypatch, tmp_pat
     assert output_path.with_suffix(".stderr.log").read_text() == "stderr\n"
 
 
+def test_agent_timeout_decodes_captured_bytes(monkeypatch, tmp_path):
+    def fake_run(*args, **kwargs):
+        del args, kwargs
+        raise subprocess.TimeoutExpired(["codex"], 5, output=b"partial stdout", stderr=b"partial stderr")
+
+    monkeypatch.setattr(loopctl.subprocess, "run", fake_run)
+    monkeypatch.setattr(loopctl.shutil, "which", lambda name: name)
+    output_path = tmp_path / "agent-last-message.md"
+
+    with pytest.raises(RuntimeError, match="timed out after 5 seconds"):
+        loopctl.codex_exec(
+            "work",
+            tmp_path,
+            output_path,
+            tmp_path / "run",
+            {"timeout_seconds": 5},
+        )
+
+    assert output_path.with_suffix(".stdout.log").read_text() == "partial stdout"
+    assert "partial stderr\nTIMEOUT after 5 seconds" in output_path.with_suffix(".stderr.log").read_text()
+
+
 def test_agent_exec_dispatches_to_claude_print_mode_and_scrubbed_env(monkeypatch, tmp_path):
     captured = {}
 

@@ -103,6 +103,31 @@ also writes ignored runtime files under:
 
 The digest is a review surface, not an approval mechanism.
 
+## GitHub Projects board claimer
+
+The board claimer consumes open Issue items from a GitHub Projects v2 `Todo`
+column in API order, up to a fixed WIP limit. It assigns the configured bot,
+moves the item to `In Progress`, runs the existing worker and reviewer gates,
+and opens one branch and one PR per issue. A successful item stays `In
+Progress` while its PR waits for Park; the claimer never merges or marks it
+`Done`.
+
+```bash
+python3 loop-engine/bin/board_claimer.py once --owner zinan92 --project-number 3
+python3 loop-engine/bin/board_claimer.py start --owner zinan92 --project-number 3
+python3 loop-engine/bin/board_claimer.py status --owner zinan92 --project-number 3
+python3 loop-engine/bin/board_claimer.py stop --owner zinan92 --project-number 3
+```
+
+For a deliberately tiny queue, `--worker-reasoning-effort low` can override
+only the worker effort for that claimer process; the configured model,
+timeout, sandbox, verification, and reviewer remain unchanged.
+
+The authenticated `gh` actor must match `--actor` (default `park-ai-bot`). A
+failed task is released back to `Todo`, unassigned, and the run stops instead
+of skipping ahead. `start` is an explicit daemon start and `stop` terminates
+that daemon; no login or scheduler persistence is installed.
+
 ## Feedback-Aware Memory
 
 Each completed cycle writes ignored runtime files:
