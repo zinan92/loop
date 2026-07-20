@@ -30,6 +30,7 @@ def usage(code: int = 2) -> int:
         "  /loop resume [project]\n"
         "  /loop stop [project]\n"
         "  /loop run-now [project] [--supervised]\n"
+        "  /loop board-claimer once|start|stop|status [options]\n"
         "  /loop notify setup|test|status\n"
         "  /loop scheduler install [project]\n"
         "  /loop scheduler load [project]\n"
@@ -137,6 +138,9 @@ def main() -> int:
         loopctl_args = ["scheduler", rest[0]]
         if project:
             loopctl_args += ["--project", project]
+    elif command == "board-claimer":
+        result = subprocess.run([sys.executable, str(HERE / "board_claimer.py")] + rest)
+        return result.returncode
     else:
         return usage()
 

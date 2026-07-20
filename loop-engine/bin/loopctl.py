@@ -2202,7 +2202,12 @@ def screen_blocked(issue_path: Path, blocked_categories: list[str]) -> list[str]
 
 def changed_files(worktree_path: Path) -> list[str]:
     """Files modified in the worktree per git porcelain status."""
-    out = run(["git", "status", "--porcelain"], cwd=worktree_path).stdout
+    # Expand untracked directories so an exact Allowed Files entry can be
+    # checked against the actual file instead of Git's collapsed `docs/` row.
+    out = run(
+        ["git", "status", "--porcelain", "--untracked-files=all"],
+        cwd=worktree_path,
+    ).stdout
     files: list[str] = []
     for line in out.splitlines():
         if len(line) < 4:
@@ -2817,9 +2822,14 @@ def agent_exec(
             env=agent_env(),
         )
     except subprocess.TimeoutExpired as exc:
-        output_path.with_suffix(".stdout.log").write_text(exc.stdout or "")
+        def timeout_output(value: str | bytes | None) -> str:
+            if isinstance(value, bytes):
+                return value.decode(errors="replace")
+            return value or ""
+
+        output_path.with_suffix(".stdout.log").write_text(timeout_output(exc.stdout))
         output_path.with_suffix(".stderr.log").write_text(
-            (exc.stderr or "") + f"\nTIMEOUT after {timeout_seconds} seconds\n"
+            timeout_output(exc.stderr) + f"\nTIMEOUT after {timeout_seconds} seconds\n"
         )
         raise RuntimeError(f"{provider} exec timed out after {timeout_seconds} seconds")
     output_path.with_suffix(".stdout.log").write_text(result.stdout)
@@ -2848,7 +2858,13 @@ def ensure_project_clean(repo_path: Path) -> None:
         raise RuntimeError(f"project repo is not clean before loop run:\n{status}")
 
 
-def make_worktree(project: str, repo_path: Path, pilot_branch: str, branch_suffix: str) -> tuple[Path, str]:
+def make_worktree(
+    project: str,
+    repo_path: Path,
+    pilot_branch: str,
+    branch_suffix: str,
+    base_ref: str | None = None,
+) -> tuple[Path, str]:
     worktree_root = ENGINE_ROOT / "worktrees"
     worktree_root.mkdir(parents=True, exist_ok=True)
     worktree_path = worktree_root / branch_suffix
@@ -2856,7 +2872,10 @@ def make_worktree(project: str, repo_path: Path, pilot_branch: str, branch_suffi
     if worktree_path.exists():
         shutil.rmtree(worktree_path)
     run(["git", "fetch", "origin", pilot_branch], cwd=repo_path)
-    run(["git", "worktree", "add", "-b", branch, str(worktree_path), pilot_branch], cwd=repo_path)
+    run(
+        ["git", "worktree", "add", "-b", branch, str(worktree_path), base_ref or pilot_branch],
+        cwd=repo_path,
+    )
     return worktree_path, branch
 
 
@@ -2880,10 +2899,23 @@ def planner(project: str, cfg: dict, run_dir: Path, policy: dict | None = None, 
     )
 
 
-def worker(project: str, cfg: dict, task_dir: Path, issue_path: Path, branch_suffix: str) -> tuple[Path, str]:
+def worker(
+    project: str,
+    cfg: dict,
+    task_dir: Path,
+    issue_path: Path,
+    branch_suffix: str,
+    base_ref: str | None = None,
+) -> tuple[Path, str]:
     repo_path = Path(cfg["repo_path"])
     ensure_project_clean(repo_path)
-    worktree_path, branch = make_worktree(project, repo_path, cfg["pilot_branch"], branch_suffix)
+    worktree_path, branch = make_worktree(
+        project,
+        repo_path,
+        cfg["pilot_branch"],
+        branch_suffix,
+        base_ref=base_ref,
+    )
     values = base_prompt_values(project, cfg, task_dir)
     values.update({
         "WORKTREE_PATH": str(worktree_path),

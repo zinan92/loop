@@ -394,3 +394,46 @@ Let the LLM temporarily cover judgment-heavy daily-closeout gaps while keeping d
 - The LLM PM Review can say `推断，待 Park 确认`; it cannot silently turn inference into fact.
 - The LLM may explain a `状态未知` gate, but it must not relabel it as `通过`.
 - This fallback reduces daily friction, but artifact-specific evaluators are still the durable fix for recurring unknown gates.
+
+## 2026-07-20 GitHub Projects Board Claimer
+
+### Objective
+
+Let Mini consume Park-approved work from the shared Dev Queue in visible order,
+while preserving the human-only merge boundary.
+
+### Decisions
+
+- Treat the Projects v2 item order returned by GitHub as the queue order and
+  claim `Todo` issues from top to bottom, bounded by a WIP limit of three.
+- Reuse the existing loop worker, trusted verification, allowlist, secret scan,
+  and independent reviewer gates instead of creating a second execution path.
+- Create one branch and one open PR per issue. Keep successful board items `In
+  Progress` because Dev Queue has no `In Review` status; only Park may merge or
+  move them to `Done`.
+- Stack later PRs on the current bot-owned open PR tip when several unmerged
+  issues from the same repo are claimed in queue order. This preserves one-file
+  diffs and lets later verification include earlier, still-unmerged fixes.
+- Fail closed on actor mismatch, invisible/malformed board state, non-low risk,
+  blocked categories, untrusted verification, or reviewer failure. A failed
+  claim is returned to `Todo`, unassigned, and the run stops before later work.
+- Keep GitHub credentials in the engine environment only. Agent subprocesses
+  continue to receive the existing scrubbed environment.
+
+### Gotchas
+
+- Projects v2 exposes item order through the item connection; manually
+  reordering cards changes the next claim order.
+- WIP is counted from every board item in `In Progress`, not only items claimed
+  by this process.
+- A successful run deliberately leaves items in `In Progress`; the linked open
+  PR is the review-state evidence until the board gains an `In Review` option.
+- The daemon is opt-in and has no launchd/login persistence. Operators must run
+  `board-claimer stop` to remove the active process after an exercise.
+- New directories must be expanded with `git status --untracked-files=all`;
+  otherwise Git reports only `docs/` and an exact Allowed Files entry is
+  incorrectly rejected.
+- A worker timeout can return captured output as bytes even with text mode; the
+  timeout ledger must decode it before appending the timeout marker.
+- Stack discovery is rebuilt from live bot-owned open PRs every cycle and fails
+  closed if those PRs do not form one chain with a unique tip.
