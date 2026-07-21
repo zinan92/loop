@@ -437,3 +437,46 @@ while preserving the human-only merge boundary.
   timeout ledger must decode it before appending the timeout marker.
 - Stack discovery is rebuilt from live bot-owned open PRs every cycle and fails
   closed if those PRs do not form one chain with a unique tip.
+
+## 2026-07-21 Auditable Park Approval For Board Claimer
+
+### Objective
+
+Let Park deliberately release a bounded medium/high-risk Dev Queue item without
+turning a label name or a bot action into authority, while making the approval
+trace visible in the claim itself.
+
+### Decisions
+
+- Keep `Risk: low` as the automatic path. `Risk: medium` and `Risk: high` are
+  claimable only while the issue currently has `park-approved` and the latest
+  label lifecycle event proves that `zinan92` added it.
+- Validate the current label lifecycle, not merely historical presence. An
+  owner-added label that was later removed cannot authorize a bot-added
+  replacement with the same name.
+- Cite the exact GitHub label event in the signed claim comment and revalidate
+  approval immediately before execution, so label removal after claim fails
+  closed before the worker starts.
+- Keep missing or unsupported risk declarations blocked. The approval channel
+  does not infer risk or weaken blocked-category, trusted-verification,
+  allowlist, secret-scan, reviewer, PR-only, or human-merge gates.
+- Scan `Outcome` as positive task intent, and default missing/empty blocked
+  category config to every known category. Invalid types or unknown names stop
+  execution instead of silently disabling a gate.
+- Expand the private runtime registry with the active `trading-system`,
+  `datafeed`, `life-kline`, `equity-research`, and `paileggemai` mappings. The
+  existing `loop` and `daily-newsletter` mappings remain the queue paths for
+  the next two tasks.
+
+### Gotchas
+
+- `loop-engine/registry.json` remains a private, git-ignored runtime artifact;
+  its live mapping verification is delivery evidence, not a committed config.
+- GitHub label event order is authoritative for the current approval actor. If
+  events are unavailable or lack a stable event ID, authorization fails closed.
+- Approval is fetched again after registry and verification preflight, directly
+  before the worker call; this narrows revocation races without trusting an
+  earlier claim-time snapshot.
+- Approval releases only a declared medium/high risk gate. A missing `## Risk`
+  section and missing trusted `## Verification Commands` still block daemon
+  execution and must be corrected by the dispatcher rather than inferred.

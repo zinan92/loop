@@ -25,6 +25,7 @@ DEFAULT_PROJECT_NUMBER = 3
 DEFAULT_ACTOR = "park-ai-bot"
 DEFAULT_WIP_LIMIT = 3
 DEFAULT_POLL_SECONDS = 60
+PARK_APPROVED_LABEL = "park-approved"
 _STOP_REQUESTED = False
 
 
@@ -190,6 +191,22 @@ def read_registry(path: Path) -> dict:
     return json.loads(path.read_text())
 
 
+def blocked_categories_for(cfg: dict) -> list[str]:
+    configured = (
+        cfg.get("blocked_categories")
+        or (cfg.get("auto_approval") or {}).get("blocked_categories")
+    )
+    if not configured:
+        return list(loopctl.BLOCKED_SIGNALS)
+    if not isinstance(configured, (list, tuple)):
+        raise RuntimeError("blocked_categories must be a list of known category names")
+    categories = [str(category) for category in configured]
+    unknown = sorted(set(categories) - set(loopctl.BLOCKED_SIGNALS))
+    if unknown:
+        raise RuntimeError("unknown blocked_categories: " + ", ".join(unknown))
+    return categories
+
+
 def project_config_for_repo(registry: dict, repo: str) -> tuple[str, dict]:
     for project, cfg in (registry.get("projects") or {}).items():
         if str(cfg.get("github_repo") or "").lower() == repo.lower():
@@ -306,15 +323,22 @@ class BoardClaimer:
         ], check=check)
 
     def claim(self, board: BoardSnapshot, item: BoardItem, position: int, run_id: str) -> None:
+        issue = self.fetch_issue(item)
+        approval_evidence = self.authorize_issue(item, issue)
         assigned = False
         try:
             if self.actor not in item.assignees:
                 self.assign(item, True)
                 assigned = True
+            approval_line = (
+                f"- Park approval: {approval_evidence}\n"
+                if approval_evidence else ""
+            )
             self.issue_comment(
                 item,
                 f"Claimed by **{self.actor}** via loop board-claimer.\n\n"
                 f"- Queue: `Todo`\n- Position: `{position}`\n- Run: `{run_id}`\n"
+                f"{approval_line}"
                 f"- Signature: `{self.actor} / Mini execution`",
             )
             self.set_status(board, item, "In Progress")
@@ -340,11 +364,68 @@ class BoardClaimer:
     def fetch_issue(self, item: BoardItem) -> dict:
         payload = self.github.json([
             "issue", "view", str(item.number), "--repo", item.repo,
-            "--json", "id,number,title,body,url,state,assignees",
+            "--json", "id,number,title,body,url,state,assignees,labels",
         ])
         if not isinstance(payload, dict) or payload.get("state") != "OPEN":
             raise RuntimeError(f"board item is not an open issue: {item.url}")
         return payload
+
+    def issue_events(self, item: BoardItem) -> list[dict]:
+        payload = self.github.json([
+            "api", "--paginate", "--slurp",
+            f"repos/{item.repo}/issues/{item.number}/events",
+        ])
+        if not isinstance(payload, list):
+            raise RuntimeError("GitHub issue events response was not a list")
+        events: list[dict] = []
+        for page in payload:
+            if isinstance(page, list):
+                events.extend(event for event in page if isinstance(event, dict))
+            elif isinstance(page, dict):
+                events.append(page)
+        return events
+
+    def park_approval_evidence(self, item: BoardItem, issue: dict) -> str | None:
+        labels = {
+            str(label.get("name") or "").strip().lower()
+            for label in issue.get("labels") or []
+            if isinstance(label, dict)
+        }
+        if PARK_APPROVED_LABEL not in labels:
+            return None
+        lifecycle = []
+        for event in self.issue_events(item):
+            label = event.get("label") or {}
+            if (
+                str(event.get("event") or "") in {"labeled", "unlabeled"}
+                and str(label.get("name") or "").strip().lower() == PARK_APPROVED_LABEL
+            ):
+                lifecycle.append(event)
+        if not lifecycle:
+            return None
+        current = lifecycle[-1]
+        actor = current.get("actor") or {}
+        if current.get("event") != "labeled" or str(actor.get("login") or "") != self.owner:
+            return None
+        event_id = current.get("id")
+        if not event_id:
+            return None
+        return f"{item.url}#event-{event_id}"
+
+    def authorize_issue(self, item: BoardItem, issue: dict) -> str | None:
+        risk = loopctl.parse_issue_risk_text(issue_markdown(issue))
+        if risk == "low":
+            return None
+        if risk not in {"medium", "high"}:
+            raise RuntimeError(
+                "board-claimer requires Risk: low, medium, or high; unsupported or missing risk stays fail-closed"
+            )
+        evidence = self.park_approval_evidence(item, issue)
+        if not evidence:
+            raise RuntimeError(
+                f"Risk: {risk} requires a current `{PARK_APPROVED_LABEL}` label added by {self.owner}"
+            )
+        return evidence
 
     def existing_open_pr(self, item: BoardItem) -> dict | None:
         payload = self.github.json([
@@ -492,6 +573,7 @@ class BoardClaimer:
             self.stack_base_by_repo[item.repo] = str(existing["headRefName"])
             return str(existing["url"])
         issue = self.fetch_issue(item)
+        self.authorize_issue(item, issue)
         registry = read_registry(self.registry_path)
         project, cfg = project_config_for_repo(registry, item.repo)
         if self.worker_reasoning_effort:
@@ -511,9 +593,7 @@ class BoardClaimer:
         issue_path.write_text(issue_markdown(issue))
         (task_dir / "github-issue-url.txt").write_text(item.url + "\n")
 
-        if loopctl.parse_issue_risk(issue_path) != "low":
-            raise RuntimeError("board-claimer auto-executes only issues marked Risk: low")
-        hits = loopctl.screen_blocked(issue_path, cfg.get("blocked_categories") or [])
+        hits = loopctl.screen_blocked(issue_path, blocked_categories_for(cfg))
         if hits:
             raise RuntimeError("issue matched blocked categories: " + ", ".join(hits))
         commands = loopctl.trusted_verification_commands(issue_path, cfg)
@@ -532,6 +612,10 @@ class BoardClaimer:
         previous_identity = {key: os.environ.get(key) for key in git_identity}
         os.environ.update(git_identity)
         try:
+            latest_issue = self.fetch_issue(item)
+            if issue_markdown(latest_issue) != issue_markdown(issue):
+                raise RuntimeError("issue contract changed during execution preflight")
+            self.authorize_issue(item, latest_issue)
             worktree_path, branch = loopctl.worker(
                 project,
                 cfg,

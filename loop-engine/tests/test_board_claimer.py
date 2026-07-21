@@ -82,6 +82,63 @@ class RecordingClaimer(board_claimer.BoardClaimer):
         self.events.append(("release", item.number, reason))
 
 
+class ApprovalClaimer(board_claimer.BoardClaimer):
+    def __init__(self, tmp_path, issue, events):
+        super().__init__(
+            owner="zinan92",
+            project_number=3,
+            actor="park-ai-bot",
+            wip_limit=3,
+            registry_path=tmp_path / "registry.json",
+            runtime_root=tmp_path,
+        )
+        self.issue = issue
+        self.approval_events = events
+        self.calls = []
+
+    def fetch_issue(self, item):
+        del item
+        return self.issue
+
+    def existing_open_pr(self, item):
+        del item
+        return None
+
+    def issue_events(self, item):
+        del item
+        return self.approval_events
+
+    def assign(self, item, add, check=True):
+        del check
+        self.calls.append(("assign", item.number, add))
+
+    def issue_comment(self, item, body, check=True):
+        del check
+        self.calls.append(("comment", item.number, body))
+
+    def set_status(self, board, item, status):
+        del board
+        self.calls.append(("status", item.number, status))
+
+
+def _risk_issue(risk, labels=()):
+    return {
+        "title": "Risk-gated task",
+        "body": f"## Outcome\nDo the bounded task.\n\n## Risk\n{risk}\n",
+        "labels": [{"name": label} for label in labels],
+        "state": "OPEN",
+    }
+
+
+def _label_event(event_id, actor, event="labeled"):
+    return {
+        "id": event_id,
+        "event": event,
+        "actor": {"login": actor},
+        "label": {"name": "park-approved"},
+    }
+
+
 def test_parse_board_preserves_todo_order_and_status():
     payload = {
         "data": {"user": {"projectV2": {
@@ -115,6 +172,222 @@ def test_parse_board_preserves_todo_order_and_status():
     assert [item.number for item in board.items] == [31, 32]
     assert [item.status for item in board.items] == ["Todo", "In Progress"]
     assert board.items[1].assignees == ("park-ai-bot",)
+
+
+def test_high_risk_without_park_approval_stays_fail_closed(tmp_path):
+    claimer = ApprovalClaimer(tmp_path, _risk_issue("high"), [])
+
+    with pytest.raises(RuntimeError, match="requires a current `park-approved` label"):
+        claimer.claim(_snapshot(_item(49)), _item(49), 1, "run-1")
+
+    assert claimer.calls == []
+
+
+def test_owner_added_park_approval_allows_claim_and_cites_event(tmp_path):
+    claimer = ApprovalClaimer(
+        tmp_path,
+        _risk_issue("high", ["park-approved"]),
+        [_label_event(123456, "zinan92")],
+    )
+    item = _item(49)
+
+    claimer.claim(_snapshot(item), item, 1, "run-1")
+
+    comment = next(call[2] for call in claimer.calls if call[0] == "comment")
+    assert "https://github.com/zinan92/tokenpulse/issues/49#event-123456" in comment
+    assert ("assign", 49, True) in claimer.calls
+    assert ("status", 49, "In Progress") in claimer.calls
+
+
+def test_same_approval_label_added_by_bot_is_not_trusted(tmp_path):
+    claimer = ApprovalClaimer(
+        tmp_path,
+        _risk_issue("high", ["park-approved"]),
+        [_label_event(123456, "park-ai-bot")],
+    )
+
+    with pytest.raises(RuntimeError, match="added by zinan92"):
+        claimer.claim(_snapshot(_item(49)), _item(49), 1, "run-1")
+
+    assert claimer.calls == []
+
+
+def test_latest_label_lifecycle_actor_controls_current_approval(tmp_path):
+    claimer = ApprovalClaimer(
+        tmp_path,
+        _risk_issue("high", ["park-approved"]),
+        [
+            _label_event(100, "zinan92"),
+            _label_event(101, "zinan92", event="unlabeled"),
+            _label_event(102, "park-ai-bot"),
+        ],
+    )
+
+    with pytest.raises(RuntimeError, match="added by zinan92"):
+        claimer.claim(_snapshot(_item(49)), _item(49), 1, "run-1")
+
+    assert claimer.calls == []
+
+
+def test_approval_does_not_rescue_missing_or_unsupported_risk(tmp_path):
+    claimer = ApprovalClaimer(
+        tmp_path,
+        _risk_issue("unknown", ["park-approved"]),
+        [_label_event(123456, "zinan92")],
+    )
+
+    with pytest.raises(RuntimeError, match="unsupported or missing risk stays fail-closed"):
+        claimer.claim(_snapshot(_item(49)), _item(49), 1, "run-1")
+
+    assert claimer.calls == []
+
+
+def test_execute_rechecks_approval_after_claim_before_worker(monkeypatch, tmp_path):
+    claimer = ApprovalClaimer(
+        tmp_path,
+        _risk_issue("high", ["park-approved"]),
+        [_label_event(123456, "zinan92")],
+    )
+    item = _item(49)
+    claimer.claim(_snapshot(item), item, 1, "run-1")
+    claimer.issue = _risk_issue("high")
+    worker_called = False
+
+    def fail_if_worker_runs(*args, **kwargs):
+        nonlocal worker_called
+        worker_called = True
+        pytest.fail("worker must not run after Park approval is removed")
+
+    monkeypatch.setattr(board_claimer.loopctl, "worker", fail_if_worker_runs)
+
+    with pytest.raises(RuntimeError, match="requires a current `park-approved` label"):
+        claimer.execute(item, "run-1")
+
+    assert worker_called is False
+
+
+def test_execute_rechecks_approval_immediately_after_preflight(monkeypatch, tmp_path):
+    claimer = ApprovalClaimer(
+        tmp_path,
+        _risk_issue("high", ["park-approved"]),
+        [_label_event(123456, "zinan92")],
+    )
+    item = _item(49)
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    issue_sequence = iter([
+        _risk_issue("high", ["park-approved"]),
+        _risk_issue("high"),
+    ])
+    worker_called = False
+
+    monkeypatch.setattr(claimer, "fetch_issue", lambda value: next(issue_sequence))
+    monkeypatch.setattr(claimer, "default_branch", lambda repo: "main")
+    monkeypatch.setattr(board_claimer, "read_registry", lambda path: {})
+    monkeypatch.setattr(board_claimer, "project_config_for_repo", lambda registry, repo: (
+        "tokenpulse",
+        {"repo_path": str(repo_path), "pilot_branch": "main"},
+    ))
+    monkeypatch.setattr(board_claimer.loopctl, "screen_blocked", lambda path, categories: [])
+    monkeypatch.setattr(board_claimer.loopctl, "trusted_verification_commands", lambda path, cfg: [])
+
+    def fail_if_worker_runs(*args, **kwargs):
+        nonlocal worker_called
+        worker_called = True
+        pytest.fail("worker must not run when approval is removed during preflight")
+
+    monkeypatch.setattr(board_claimer.loopctl, "worker", fail_if_worker_runs)
+
+    with pytest.raises(RuntimeError, match="requires a current `park-approved` label"):
+        claimer.execute(item, "run-1")
+
+    assert worker_called is False
+
+
+@pytest.mark.parametrize("contract_change", ["risk-downgrade", "body-edit"])
+def test_execute_rejects_contract_changes_after_initial_authorization(
+    monkeypatch,
+    tmp_path,
+    contract_change,
+):
+    initial_issue = _risk_issue("high", ["park-approved"])
+    latest_issue = (
+        _risk_issue("low")
+        if contract_change == "risk-downgrade"
+        else {
+            **_risk_issue("high", ["park-approved"]),
+            "body": _risk_issue("high", ["park-approved"])["body"] + "\nChanged scope.\n",
+        }
+    )
+    claimer = ApprovalClaimer(
+        tmp_path,
+        initial_issue,
+        [_label_event(123456, "zinan92")],
+    )
+    item = _item(49)
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    issue_sequence = iter([initial_issue, latest_issue])
+    worker_called = False
+
+    monkeypatch.setattr(claimer, "fetch_issue", lambda value: next(issue_sequence))
+    monkeypatch.setattr(claimer, "default_branch", lambda repo: "main")
+    monkeypatch.setattr(board_claimer, "read_registry", lambda path: {})
+    monkeypatch.setattr(board_claimer, "project_config_for_repo", lambda registry, repo: (
+        "tokenpulse",
+        {"repo_path": str(repo_path), "pilot_branch": "main"},
+    ))
+    monkeypatch.setattr(board_claimer.loopctl, "screen_blocked", lambda path, categories: [])
+    monkeypatch.setattr(board_claimer.loopctl, "trusted_verification_commands", lambda path, cfg: [])
+
+    def fail_if_worker_runs(*args, **kwargs):
+        nonlocal worker_called
+        worker_called = True
+        pytest.fail("worker must not run with a changed issue contract")
+
+    monkeypatch.setattr(board_claimer.loopctl, "worker", fail_if_worker_runs)
+
+    with pytest.raises(RuntimeError, match="issue contract changed during execution preflight"):
+        claimer.execute(item, "run-1")
+
+    assert worker_called is False
+
+
+def test_blocked_gate_scans_outcome_even_with_verification_commands(tmp_path):
+    issue = tmp_path / "issue.md"
+    issue.write_text(
+        "# Unsafe\n\n"
+        "## Outcome\nDeploy with production credentials.\n\n"
+        "## Verification Commands\npython3 -m pytest tests/\n"
+    )
+
+    hits = board_claimer.loopctl.screen_blocked(
+        issue,
+        board_claimer.blocked_categories_for({}),
+    )
+
+    assert "credentials:credential" in hits
+    assert "publishing:deploy" in hits
+
+
+@pytest.mark.parametrize(
+    "cfg",
+    [{}, {"blocked_categories": []}, {"auto_approval": {"blocked_categories": []}}],
+)
+def test_missing_blocked_category_config_defaults_to_every_gate(cfg):
+    assert board_claimer.blocked_categories_for(cfg) == list(board_claimer.loopctl.BLOCKED_SIGNALS)
+
+
+@pytest.mark.parametrize(
+    "cfg",
+    [
+        {"blocked_categories": "credentials"},
+        {"blocked_categories": ["credentails"]},
+    ],
+)
+def test_invalid_blocked_category_config_fails_closed(cfg):
+    with pytest.raises(RuntimeError, match="blocked_categories"):
+        board_claimer.blocked_categories_for(cfg)
 
 
 def test_run_once_claims_todo_top_to_bottom_with_wip_limit(tmp_path):
