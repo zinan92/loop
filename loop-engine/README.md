@@ -128,6 +128,19 @@ failed task is released back to `Todo`, unassigned, and the run stops instead
 of skipping ahead. `start` is an explicit daemon start and `stop` terminates
 that daemon; no login or scheduler persistence is installed.
 
+`Risk: low` remains the automatic path. A declared `Risk: medium` or
+`Risk: high` item is eligible only when its current `park-approved` label was added by
+the Project owner (`--owner`, default `zinan92`). The claimer verifies the
+latest label lifecycle event, cites that event in its signed claim comment,
+and rechecks it before execution. A bot-added lookalike label, a removed owner
+label, a missing/unsupported risk declaration, or any other failed safety gate
+stays fail-closed.
+
+Every repository that can appear in Dev Queue must have an exact
+`github_repo` mapping in the private `loop-engine/registry.json`. That runtime
+file stays git-ignored because it contains machine-local paths; use the
+committed example only as a schema reference.
+
 ## Feedback-Aware Memory
 
 Each completed cycle writes ignored runtime files:

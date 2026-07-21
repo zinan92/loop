@@ -1929,7 +1929,11 @@ def parse_verification_commands(issue_path: Path) -> list[str]:
 
 
 def parse_issue_risk(issue_path: Path) -> str:
-    sections = issue_sections(issue_path)
+    return parse_issue_risk_text(issue_path.read_text())
+
+
+def parse_issue_risk_text(text: str) -> str:
+    sections = issue_sections_text(text)
     risk_text = sections.get("risk", "")
     for line in risk_text.splitlines():
         item = line.strip().lstrip("-*").strip().lower()
@@ -1975,7 +1979,7 @@ def project_trusted_verification_commands(cfg: dict) -> list[str]:
 # "Out Of Scope" / "Reviewer Checklist" enumerate prohibitions ("no credentials,
 # no launchd, no publishing") and must NOT be screened, or every legitimate
 # issue trips the blocked-category scan.
-SCREEN_SECTIONS = ("goal", "context", "verification commands")
+SCREEN_SECTIONS = ("goal", "outcome", "context", "verification commands")
 NEGATIVE_SCREEN_MARKERS = (
     "do not ",
     "don't ",
@@ -2005,11 +2009,11 @@ TRADING_READ_ONLY_MARKERS = (
 )
 
 
-def issue_sections(issue_path: Path) -> dict[str, str]:
-    """Split an issue markdown file into {lowercased H2 header: body}."""
+def issue_sections_text(text: str) -> dict[str, str]:
+    """Split issue markdown into {lowercased H2 header: body}."""
     sections: dict[str, list[str]] = {}
     current: str | None = None
-    for line in issue_path.read_text().splitlines():
+    for line in text.splitlines():
         stripped = line.strip()
         if stripped.startswith("## "):
             current = stripped[3:].strip().lower()
@@ -2017,6 +2021,10 @@ def issue_sections(issue_path: Path) -> dict[str, str]:
         elif current is not None:
             sections[current].append(line)
     return {k: "\n".join(v) for k, v in sections.items()}
+
+
+def issue_sections(issue_path: Path) -> dict[str, str]:
+    return issue_sections_text(issue_path.read_text())
 
 
 def section_excerpt(sections: dict[str, str], name: str, max_chars: int = 260) -> str:
